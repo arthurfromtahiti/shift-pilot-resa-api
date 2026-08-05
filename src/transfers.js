@@ -18,4 +18,12 @@ function isFull(transfer) {
   return seatsLeft(transfer) === 0;
 }
 
-module.exports = { listTransfers, seatsLeft, isFull };
+function bookSeats(transferId, seats = 1) {
+  const transfer = transfers.find((t) => t.id === transferId);
+  if (!transfer) return { ok: false, reason: "not_found" };
+  if (seatsLeft(transfer) < seats) return { ok: false, reason: "full" };
+  transfer.sold += seats;
+  return { ok: true, seatsLeft: seatsLeft(transfer) };
+}
+
+module.exports = { listTransfers, seatsLeft, isFull, bookSeats };
