@@ -12,7 +12,7 @@ API backend Node.js minimaliste exposant un catalogue de transferts inter-îles 
 - Langage : JavaScript (Node.js, sans framework — HTTP natif)
 - Serveur : HTTP minimaliste (`http.createServer`)
 - Données : données en mémoire (tableau statique + mutations in-memory)
-- Tests : Jest + requêtes HTTP d'intégration
+- Tests : node:test (test runner natif Node.js) + http natif
 
 ---
 

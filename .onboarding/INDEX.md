@@ -27,7 +27,7 @@
 - **Workflow 1** : Consultation catalogue (GET /transfers) — flux principal
 - **Workflow 2** : Réservation (POST /transfers/:id/reserve) — nouveau (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
 - Diagrammes séquence, états, transitions
-- Scénarios de test (5 cas couverts)
+- Scénarios de test (3 cas couverts)
 - Interactions entre workflows
 - Points critiques et mitigations (race conditions, persistance, auth)
 
@@ -117,7 +117,7 @@
 | Artefact | Vs. Code | Vs. Tests | Notes |
 |----------|----------|-----------|-------|
 | CARTE_DOMAINE.md | ✓ | ✓ | Fonctions et contrats JSON alignés |
-| WORKFLOWS.md | ✓ | ✓ | 5 scénarios test couverts par server.test.js |
+| WORKFLOWS.md | ✓ | ✓ | 3 scénarios test couverts par server.test.js |
 | CARTOGRAPHIE_CODE.md | ✓ | ✓ | Ligne-par-ligne aligné avec src/*.js |
 
 ---
@@ -145,7 +145,7 @@
 ## Ressources externes
 
 - **Code** : tous les fichiers src/, test/
-- **Dépendances** : package.json (Jest, Supertest)
+- **Dépendances** : aucune (node:test natif)
 - **Intégration** : voir documents/ECOSYSTEME.md (relations avec shift-pilot-resa-web)
 - **Issue parent** : SHIAAAAAAAAAAAAAAAAAAAAAAAA-60 (epic réservation)
 - **PR ferme** : SHIAAAAAAAAAAAAAAAAAAAAAAAA-61 (merged main)
