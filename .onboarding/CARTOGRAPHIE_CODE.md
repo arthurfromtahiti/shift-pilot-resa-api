@@ -159,7 +159,7 @@ module.exports = server;
 ```javascript
 const { listTransfers, seatsLeft, bookSeats } = require("./transfers");
 ```
-- Importe 4 fonctions du module transfers (bookSeats ajouté en SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
+- Importe 3 fonctions du module transfers (bookSeats ajouté en SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
 - isFull non importée (non utilisée)
 
 #### Helper sendJson() — Ligne 5-8
@@ -172,7 +172,7 @@ function sendJson(res, status, body) {
 - **Entrée** : réponse HTTP, statut, objet JS
 - **Sortie** : écrit en réponse HTTP
 - **Rôle** : factoriser Content-Type + sérialisation JSON
-- **Usage** : appelée 4x (GET 200, POST 200, POST 404, POST 409)
+- **Usage** : appelée 5x (GET 200, POST 200, POST 404, POST 409, catch-all 404 ligne 44)
 
 #### Route : GET /transfers — Ligne 13-21
 ```javascript
@@ -186,7 +186,7 @@ if (url.pathname === "/transfers" && req.method === "GET") {
   })));
 }
 ```
-- **Condition** : exact match "/" + méthode GET
+- **Condition** : exact match "/transfers" + méthode GET
 - **Traitement** :
   1. Appel `listTransfers()` → catalogue brut
   2. Map projection `{ id, from, to, price, seatsLeft }`
@@ -302,7 +302,7 @@ if (require.main === module) {
 ## test/server.test.js — Tests d'intégration HTTP
 
 **Rôle** : vérifier que les endpoints HTTP répondent correctement  
-**Framework** : Jest + HTTP natif  
+**Framework** : node:test (test runner natif Node.js) + http natif  
 **Couverture** : 3 cas nouveaux (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
 
 ### Tests ajoutés
@@ -349,19 +349,8 @@ describe('POST /transfers/:id/reserve', () => {
 - `url` — parsing URL
 - `node:` prefix — explicit native modules (ES2020+)
 
-### Dépendances projet
-```json
-{
-  "devDependencies": {
-    "jest": "*",
-    "supertest": "*"
-  }
-}
-```
-- **Jest** : test runner
-- **Supertest** : helper HTTP requests dans les tests
-
-### Aucune dépendance métier
+### Aucune dépendance projet
+- Pas de dépendance de test (node:test et node:assert sont natifs)
 - Pas de framework (Express, Fastify)
 - Pas de base de données (pas d'ORM, driver DB)
 - Pas de validation (pas de Joi, Yup)

@@ -144,30 +144,28 @@
 seatsLeft = 40 - 12 = 28
 ```
 
-**Après réservation de 2 sièges** :
+**Après réservation de 1 siège** (défaut) :
 ```
 {
   id: 1,
   from: "Papeete",
   to: "Moorea",
   seats: 40,
-  sold: 14,          ← après (12 + 2)
+  sold: 13,          ← après (12 + 1)
   price: 3500
 }
-seatsLeft = 40 - 14 = 26
+seatsLeft = 40 - 13 = 27
 ```
 
 ### Scénarios de test
 
 | ID | Cas | Input | Expected Output | Status |
 |----|----|-------|-----------------|--------|
-| T1 | Réservation réussie | POST /transfers/1/reserve body={ seats: 2 } | 200 { transferId: 1, seatsLeft: 26 } | ✓ |
-| T2 | Transfert inexistant | POST /transfers/999/reserve body={ seats: 1 } | 404 { error: "Transfer not found" } | ✓ |
-| T3 | Transfert complet | POST /transfers/2/reserve body={ seats: 1 } | 409 { error: "Transfer full" } | ✓ |
-| T4 | Réservation sans body JSON | POST /transfers/1/reserve body=`` | 200 (seats=1 par défaut) | ✓ |
-| T5 | Réservation malformée | POST /transfers/1/reserve body=`{xyz}` | 200 (seats=1 par défaut) | ✓ |
+| T1 | Réservation réussie | POST /transfers/1/reserve body={} | 200 { transferId: 1, seatsLeft: 27 } | ✓ |
+| T2 | Transfert inexistant | POST /transfers/999/reserve body={} | 404 { error: "Transfer not found" } | ✓ |
+| T3 | Transfert complet | POST /transfers/2/reserve body={} | 409 { error: "Transfer full" } | ✓ |
 
-Tous les cas T1-T5 sont couverts par `test/server.test.js` (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61).
+Tous les cas T1-T3 sont couverts par `test/server.test.js` (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61).
 
 ### Points critiques
 
