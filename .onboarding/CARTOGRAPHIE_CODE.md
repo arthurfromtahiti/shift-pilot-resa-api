@@ -309,34 +309,49 @@ if (require.main === module) {
 
 | Test | Description | Assertion |
 |------|-------------|-----------|
-| POST 200 | Réservation de 2 places réussit | status 200, body { transferId: 1, seatsLeft: 26 } |
+| POST 200 | Réservation d'1 place réussit | status 200, body { transferId: 1, seatsLeft: 27 } |
 | POST 404 | Transfert inexistant | status 404, error "Transfer not found" |
 | POST 409 | Transfert complet | status 409, error "Transfer full" |
 
-**Exemple structure** (pseudo-code)
+**Exemple structure** (node:test natif)
 ```javascript
-describe('POST /transfers/:id/reserve', () => {
-  test('reserves seats successfully', async () => {
-    const res = await request(server)
-      .post('/transfers/1/reserve')
-      .send({ seats: 2 });
-    expect(res.status).toBe(200);
-    expect(res.body.seatsLeft).toBe(26);  // 28 - 2
-  });
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const http = require("node:http");
+const server = require("../src/server");
 
-  test('returns 404 for nonexistent transfer', async () => {
-    const res = await request(server)
-      .post('/transfers/999/reserve')
-      .send({ seats: 1 });
-    expect(res.status).toBe(404);
+function postJson(path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = http.request(`http://localhost:3100${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
+    });
+    req.write(payload);
+    req.end();
   });
+}
 
-  test('returns 409 for full transfer', async () => {
-    const res = await request(server)
-      .post('/transfers/2/reserve')  // Transfert 2 = 60/60, sold
-      .send({ seats: 1 });
-    expect(res.status).toBe(409);
-  });
+test("POST /transfers/1/reserve → 200, seatsLeft diminue de 1", async () => {
+  const res = await postJson("/transfers/1/reserve", {});
+  assert.equal(res.status, 200);
+  assert.equal(res.body.seatsLeft, 27);  // 40 - 12 - 1 = 27
+});
+
+test("POST /transfers/999/reserve → 404 inexistant", async () => {
+  const res = await postJson("/transfers/999/reserve", {});
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, "Transfer not found");
+});
+
+test("POST /transfers/2/reserve → 409 complet", async () => {
+  const res = await postJson("/transfers/2/reserve", {});
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "Transfer full");
 });
 ```
 
