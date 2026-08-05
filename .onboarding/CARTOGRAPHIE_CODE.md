@@ -11,7 +11,7 @@ shift-pilot-resa-api/
 │   └── transfers.js    ← Logique domaine (transferts, disponibilité, réservation)
 ├── test/
 │   └── server.test.js  ← Tests d'intégration HTTP
-├── package.json        ← Dépendances (Jest, test runner)
+├── package.json        ← Configuration (node:test natif, pas de dépendances)
 ├── README.md           ← Quickstart local
 ├── documents/
 │   └── ECOSYSTEME.md   ← Dépendances avec frontend
