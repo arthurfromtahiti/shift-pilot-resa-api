@@ -1,71 +1,62 @@
-# Audit fonctionnel — Audit
+# Fonctionnel — Audit
 
 > Confiance : high
 
 ## Compréhension globale
 
-`shift-pilot-resa-api` est nommée « API de réservation de transferts inter-îles » mais n'implémente que le versant lecture du catalogue. Aucune route de réservation n'existe. L'API répond à un objectif de démonstration (pilote SHIFT/Paperclip) et non à un produit de réservation complet. La cohérence fonctionnelle est satisfaisante dans ce périmètre restreint — mais des signaux d'incomplétude sont visibles dans le code lui-même (champ `sold` jamais mis à jour, `isFull` implémentée mais non exposée).
+`shift-pilot-resa-api` est explicitement labellisé « pilote de test SHIFT/Paperclip » (`README.md:3`) et « données en mémoire, pilote de démonstration » (`src/transfers.js:1`). L'unique fonctionnalité implémentée est la consultation du catalogue de transferts avec disponibilité calculée à la volée (`GET /transfers`). Aucun endpoint de réservation n'existe. Les données sont statiques. Le service répond à sa question pilote mais ne constitue pas une API de réservation opérationnelle.
 
 ## Résumé exécutif
 
-L'API expose une seule fonctionnalité : `GET /transfers` retourne les trois transferts inter-îles disponibles avec leur prix et le nombre de places restantes. Cette fonctionnalité est correctement implémentée et cohérente avec les workflows documentés.
-
-Ce qui est absent mais annoncé par le nom du produit : la création d'une réservation (prise de place), la modification du stock (`sold`), l'authentification d'un client réservant. Ces absences ne sont pas des bugs ; elles sont le fait d'un périmètre de pilote.
-
-Deux signaux fonctionnels méritent attention : (1) Bora Bora est complet dès le démarrage (`sold:60 = seats:60`), ce qui signifie qu'un utilisateur verra ce trajet « complet » sans avoir pu réserver — comportement étrange pour une démonstration ; (2) `isFull()` est implémentée, exportée et testée, mais jamais exposée dans la réponse HTTP. Un client doit donc calculer lui-même `seatsLeft === 0` pour savoir si un transfert est complet, alors que l'API possède la logique en interne.
-
-La réponse ne contient ni devise, ni date/heure de départ, ni délai d'expiration de l'offre, ni lien vers une route de réservation. Pour un pilote de démonstration, ces lacunes sont acceptables ; elles deviennent des questions de conception dès que le produit évolue.
+La fonctionnalité implémentée — lister les transferts inter-îles avec le nombre de places restantes — est correcte, cohérente, et testée pour sa partie logique. En revanche, l'API de réservation annoncée par le nom du service (`resa-api`) est absente : `sold` n'est jamais incrémenté, il n'existe pas de `POST /bookings` ni aucun équivalent. Trois incohérences fonctionnelles mineures sont observées : `isFull` est exportée mais non exposée dans la réponse HTTP (les clients ne reçoivent pas d'indicateur de saturation explicite) ; le transfert Papeete→Bora Bora (`seatsLeft: 0`) apparaît dans la liste sans signal d'indisponibilité ; et CORS n'est pas configuré, ce qui bloquera le frontend web en contexte navigateur. Ces points sont cohérents avec le périmètre pilote déclaré mais devront être traités avant tout déploiement orienté utilisateur final.
 
 ## Constats détaillés
 
-**Fonctionnalité livrée — VÉRIFIÉ_CODE.** `GET /transfers` (`src/server.js:13`) retourne un tableau JSON de trois objets `{ id, from, to, price, seatsLeft }`. Les champs `seats` et `sold` sont masqués — décision correcte d'encapsulation. Le calcul `seatsLeft = seats - sold` est exact (`src/transfers.js:13-15`). La réponse est statique (données en mémoire), sans appel externe.
+**Fonctionnalité implémentée : `GET /transfers`** — `VÉRIFIÉ_CODE` (`src/server.js:13-20`) : la route répond à toute requête `GET /transfers` en retournant un tableau JSON de 3 objets, chacun contenant `id, from, to, price, seatsLeft`. La projection exclut `seats` et `sold` (données internes). `seatsLeft` est calculé à la volée par `seatsLeft(t)` (`src/transfers.js:13-15`). La réponse a le statut `200` et le header `Content-Type: application/json` (`src/server.js:6`).
 
-**Réservation absente — VÉRIFIÉ_CODE.** Recherche `grep -niE "post|put|delete|patch|book|reserv|resa" src/` → aucun résultat hormis le nom du projet dans les chemins. Aucune route d'écriture, aucun mécanisme de prise de réservation, aucun décrément de `sold`. La logique de réservation n'existe pas dans ce dépôt.
+**Fonctionnalité manquante : réservation** — `VÉRIFIÉ_CODE` : aucun endpoint `POST`, `PUT`, `PATCH` ni `DELETE` n'est déclaré dans `src/server.js` (lu en entier, 30 lignes). Le champ `sold` n'est jamais modifié au runtime (`src/transfers.js:3-7` — tableau statique ; grep de `src/` : zéro occurrence de `sold =`). Le service ne peut pas traiter de réservation. Son nom (`shift-pilot-resa-api`, `resa-api` dans `src/server.js:28`) suggère que c'est la fonctionnalité cible non encore implémentée.
 
-**Bora Bora complet au démarrage — VÉRIFIÉ_CODE.** `src/transfers.js:5` : `{ id: 2, from: "Papeete", to: "Bora Bora", seats: 60, sold: 60, price: 21000 }`. `seatsLeft = 60 - 60 = 0`. Ce transfert est retourné dans la réponse de `GET /transfers` avec `seatsLeft: 0` — comme un transfert complet — sans qu'aucune réservation n'ait eu lieu. Pour un pilote de démonstration, cela illustre correctement le comportement de la donnée `sold`, mais peut induire en erreur lors de tests produit (le client voit une offre toujours indisponible).
+**`isFull` non exposée côté HTTP** — `VÉRIFIÉ_CODE` : `isFull` est exportée (`src/transfers.js:21`) mais absente de l'import `src/server.js:3` et de la projection de réponse (`src/server.js:14-20`). Le client HTTP reçoit `seatsLeft: 0` pour le transfert id 2, mais pas de champ `isFull: true` ni `available: false`. `HYPOTHÈSE` : c'est un oubli de câblage préparatoire, pas une décision fonctionnelle documentée.
 
-**`isFull()` non exposée — VÉRIFIÉ_CODE.** `src/transfers.js:17-19` implémente `isFull(transfer) = seatsLeft(transfer) === 0`. Cette fonction est exportée (`src/transfers.js:21`) et testée (`test/transfers.test.js:9-12`), mais non importée dans `src/server.js` (`src/server.js:3`). La réponse API ne contient pas de champ `isFull` ni de filtre sur la disponibilité. Un client souhaitant n'afficher que les transferts disponibles doit calculer `seatsLeft === 0` lui-même. Hypothèse : une route de filtrage (`?available=true`) ou un champ `isFull` dans la réponse était prévu mais n'a pas été implémenté.
+**Transfert complet visible sans signal** — `VÉRIFIÉ_CODE` (`src/transfers.js:5: sold: 60, seats: 60`) : le transfert Papeete→Bora Bora (id 2) apparaît dans la réponse `GET /transfers` avec `seatsLeft: 0` sans champ discriminant. Un client souhaitant filtrer les transferts disponibles doit implémenter lui-même la règle `seatsLeft === 0`. `HYPOTHÈSE` : aucun filtre côté API n'est prévu dans le pilote, mais cela devra être adressé pour une UX correcte.
 
-**Absence de devise — VÉRIFIÉ_CODE.** Le champ `price` est un entier brut (`3500`, `21000`, `1800`, `src/transfers.js:3-7`) sans unité ni devise documentée. L'API ne retourne pas de champ `currency`. Un client qui affiche le prix doit connaître la devise hors de l'API.
+**Cohérence de la réponse HTTP** — `VÉRIFIÉ_CODE` : le format de réponse est cohérent entre les deux workflows documentés (`WORKFLOW_LISTE_TRANSFERTS.md`, `WORKFLOW_CALCUL_DISPONIBILITE.md`) et le code source. Aucune incohérence de schéma entre les workflows et l'implémentation.
 
-**Absence de dimension temporelle — VÉRIFIÉ_CODE.** Aucun champ `date`, `departure_at`, `arrival_at` dans le schéma ni dans la réponse. Le modèle décrit des liaisons permanentes (Papeete→Moorea), pas des créneaux datés. Pour un vrai système de réservation de transferts inter-îles (navettes, ferries), la dimension temporelle est centrale.
+**Route 404 catch-all** — `VÉRIFIÉ_CODE` (`src/server.js:23`) : toute URL non reconnue (y compris `GET /transfers/1`, `POST /transfers`, toute autre route) retourne `{ error: "Not found" }` en statut 404. C'est fonctionnellement correct pour le pilote, mais sans distinction entre « méthode non supportée » (405) et « ressource inexistante » (404).
 
-**Cohérence du catalogue — VÉRIFIÉ_CODE.** Les trois liaisons couvertes (Papeete→Moorea, Papeete→Bora Bora, Raiatea→Tahaa) sont géographiquement cohérentes avec la Polynésie française. Le catalogue est volontairement réduit pour le pilote.
-
-**Cohérence de la projection — VÉRIFIÉ_CODE.** La réponse `{ id, from, to, price, seatsLeft }` (`src/server.js:14-20`) est compacte et lisible. Elle expose exactement ce qu'un client web a besoin pour afficher la liste des transferts disponibles avec leur tarif. Aucun champ inutile ou redondant.
+**CORS absent** — `VÉRIFIÉ_CODE` : `sendJson` (`src/server.js:5-8`) ne pose pas de header `Access-Control-Allow-Origin`. `README.md:4` confirme que `shift-pilot-resa-web` consomme cette API. En contexte navigateur (origine différente), les requêtes `GET /transfers` seront rejetées avant même d'atteindre le serveur. `HYPOTHÈSE` : dans le contexte pilote, les deux services tournent peut-être sur la même origine ou un proxy est configuré — non vérifié dans ce dépôt.
 
 ## Forces
 
-- **Réponse API compacte et bien projetée** : `{ id, from, to, price, seatsLeft }` expose exactement les champs utiles côté client, sans exposer les données internes de stock. (`src/server.js:14-20`)
-- **Données initiales cohérentes avec le domaine** : les noms de villes, les capacités (40, 60, 20 places) et les ordres de grandeur des prix sont vraisemblables pour des transferts inter-îles en Polynésie.
-- **Signal explicite « pilote »** : `src/transfers.js:1` commente explicitement « pilote de démonstration », ce qui évite de traiter ces données comme une source de vérité.
+- `GET /transfers` implémenté correctement, sortie JSON bien formée, champs internes correctement exclus (`src/server.js:14-20`).
+- Séparation claire entre la règle de calcul (`seatsLeft` dans `src/transfers.js`) et la présentation HTTP (`src/server.js`).
+- Le service est honnêtement labellisé pilote — pas de fausse promesse fonctionnelle.
 
 ## Dettes techniques
 
-- **Nom du produit non honoré** (`README.md:3`) : l'API de « réservation » n'implémente pas la réservation. La dette est connue ; elle est documentée ici pour traçabilité.
-- **`isFull` implémentée mais non exposée** (`src/transfers.js:17-21`) : logique de filtrage disponible mais morte côté API — décision à clarifier.
-- **Bora Bora complet au démarrage** (`src/transfers.js:5`) : l'offre de démonstration présente un trajet « sold out » sans qu'aucune réservation ne l'explique — confusion possible lors de tests produit.
-- **Devise non documentée dans la réponse** : le client doit connaître la devise hors de l'API.
+- **Endpoint de réservation absent** : le cœur de l'API (`resa`) n'est pas implémenté.
+- **`isFull` non câblée** : la règle de saturation existe mais n'est pas exposée aux clients.
+- **Pas de distinction 404/405** : toute requête non reconnue retourne 404 sans indiquer si c'est la méthode ou la route qui est en faute.
+- **CORS absent** : bloquant pour le frontend web en contexte cross-origin.
 
 ## Zones critiques
 
-- **L'écart entre le nom « resa » et le périmètre réel** : le nom `shift-pilot-resa-api` et `README.md:3` («API de réservation ») signalent un produit plus complet que ce qui est livré. Un senior (ou un développeur de `shift-pilot-resa-web`) pourrait chercher des routes de réservation et ne pas comprendre pourquoi elles n'existent pas. Cette zone est à documenter clairement dans les documents de référence produit.
+- L'absence de endpoint de réservation (`POST /bookings` ou équivalent) est le gap fonctionnel central : sans lui, `sold` reste statique et la disponibilité affichée est fictive.
 
 ## Risques
 
-- **`shift-pilot-resa-web` attend peut-être un champ `isFull`** : si le front a été développé en anticipant que l'API retournerait `isFull` ou que `seatsLeft === 0` est le seul moyen de détecter la complétude, tout changement de logique côté API est un breaking change silencieux. Preuve : `src/server.js:14-20` (pas de champ `isFull` dans la réponse), `src/transfers.js:17-19` (logique disponible mais non câblée).
-- **Confusion Bora Bora « complet »** : une démonstration du produit avec `shift-pilot-resa-web` montrera Papeete→Bora Bora comme indisponible dès la première page de catalogue. Ce comportement peut être mal interprété comme un bug par un testeur qui ne connaît pas les données initiales.
+- **Crédibilité de la disponibilité** : `seatsLeft` reflète des valeurs hardcodées, pas l'état réel de vente. Si `shift-pilot-resa-web` affiche ces données comme « disponibilité en temps réel », c'est trompeur. `HYPOTHÈSE` : dans le contexte pilote, c'est accepté.
+- **Frontend bloqué en navigateur** : l'absence de CORS bloque `shift-pilot-resa-web` dès qu'il tourne sur une origine différente.
 
 ## Recommandations priorisées
 
-1. **Aligner `sold` de Bora Bora avec l'usage de démonstration** — passer `sold` à une valeur < `seats` (ex. `sold: 45`) pour que le pilote montre un transfert partiellement rempli plutôt que complet d'emblée. — `src/transfers.js:5`
-2. **Décider du statut de `isFull`** — soit l'exposer dans la réponse (`isFull: seatsLeft(t) === 0`) dans la projection de `GET /transfers`, soit la retirer de l'export public pour éviter la confusion. — `src/server.js:14-20`, `src/transfers.js:17-21`
-3. **Documenter la devise** — ajouter un champ `currency: "XPF"` dans la réponse API ou une note dans `README.md` — pour que `shift-pilot-resa-web` puisse afficher le format correct.
-4. **Clarifier le périmètre dans le README** — préciser que la réservation (écriture) est hors scope du pilote actuel — pour que tout développeur entrant comprenne immédiatement l'état du produit. — `README.md`
+1. **Implémenter CORS** (au minimum `Access-Control-Allow-Origin: *` ou l'origine exacte de `shift-pilot-resa-web`) — bloquant pour le frontend — `src/server.js:5-8`
+2. **Ajouter `isFull` à la projection** de `GET /transfers` (ou un champ `available: boolean`) — `src/server.js:14-20` — cohérence fonctionnelle immédiate
+3. **Implémenter un endpoint de réservation** (`POST /bookings` ou `POST /transfers/:id/book`) avec incrémentation de `sold` — périmètre complet de l'API ; requiert une décision de persistance (voir `DATA_MODEL_AUDIT.md`)
+4. **Distinguer 404 et 405** — mineur mais améliore le debugging pour les intégrateurs
 
 ## Questions ouvertes
 
-- La route de prise de réservation (`POST /reservations` ou `POST /transfers/:id/book`) est-elle dans le backlog du projet, ou le périmètre sera-t-il élargi uniquement dans `shift-pilot-resa-web` ?
-- `isFull` est-elle destinée à alimenter un filtre côté API (`GET /transfers?available=true`) ou sera-t-elle calculée côté client ?
-- La devise est-elle XPF (franc Pacifique) ? Le format d'affichage (1 800 XPF, 1 800 F CFP) est-il défini côté `shift-pilot-resa-web` ?
-- Les trois liaisons du catalogue sont-elles définitives pour le pilote, ou d'autres trajets sont-ils prévus ?
+- L'endpoint de réservation est-il prévu dans ce service (`shift-pilot-resa-api`) ou dans un autre service du projet SHIFT ?
+- La disponibilité « temps réel » est-elle un objectif pilote ou une fonctionnalité différée à la phase suivante ?
+- `shift-pilot-resa-web` est-il servi via un proxy qui co-localise les deux services sur la même origine, ou sur des origines distinctes ?

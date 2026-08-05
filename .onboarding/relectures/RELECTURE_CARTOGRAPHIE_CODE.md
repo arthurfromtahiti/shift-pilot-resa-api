@@ -1,38 +1,42 @@
-# Relecture — CARTOGRAPHIE_CODE.md
+# Relecture — CARTOGRAPHIE_CODE
 
 ## Verdict global
 
-**Bon** — Cartographie précise, bien sourcée, exploitant fidèlement CODE_HOTSPOTS_AUDIT et ARCHITECTURE_AUDIT. Tous les numéros de ligne sont exacts. La correction demandée au tour 1 (contradiction sur la résilience aux exceptions) a été appliquée correctement. Aucun bloquant.
+**Bon** — La cartographie est exhaustive, précise et intégralement traçable aux audits. Chaque domaine, export, import, point critique et anti-pattern est sourcé avec le fichier et la ligne correspondants. Le diagramme de flux de requête est fidèle au code. Un point mineur signalé sur la section "Évolutions prévisibles" (projections techniques non sourcées dans les audits), mais clairement étiquetée comme telle — non bloquant.
 
-> **Tour 1** : verdict « Acceptable avec réserves » — 1 bloquant (formulation contradictoire avec FUNCTIONAL_AUDIT sur le risque de crash sans `try/catch`).
-> **Tour 2** : correction appliquée — formulation conforme à l'amont. Verdict final : Bon.
+---
 
 ## Problèmes bloquants
 
 Aucun.
 
+---
+
 ## Problèmes mineurs
 
-Aucun.
+**[M1] "Évolutions prévisibles" — recommandations non entièrement sourcées dans les audits (§ Évolutions prévisibles, lignes ~258-268)**
+
+Les items "Possiblement ajouter un pool de connexion/cache" et "Adapter `listTransfers()` pour retourner une promesse (changement d'API)" sont des projections d'ingénierie raisonnables mais non présentes dans les audits amont (`ARCHITECTURE_AUDIT.md § Recommandations` ne mentionne pas de pool de connexion ni de promesse). L'item "POST /bookings" est sourcé dans `FUNCTIONAL_AUDIT.md:55`. La section est clairement étiquetée "prévisibles" (pas "prouvées"), ce qui atténue le risque d'invention — mais une note explicite `(HYPOTHÈSE — extrapolation non sourcée dans les audits)` renforcerait l'honnêteté du document.
+
+---
 
 ## Points vérifiés et corrects
 
-- **Arborescence du projet** → liste complète, cohérente avec le code source vérifié. ✓
-- **Domaine 1 — Catalogue** : `src/transfers.js:3-7` (tableau), `:9-11` (listTransfers), `:13-15` (seatsLeft), `src/server.js:14-20` (projection), `test/transfers.test.js:14-16` → tous vérifiés ligne par ligne. ✓
-- **Risque "Ajouter un 4e transfert casse le test"** → WORKFLOW_SUITE_TESTS "Cardinalité hard-codée". ✓
-- **Domaine 2 — Disponibilité** : `src/transfers.js:13-15` (seatsLeft), `:17-19` (isFull), `src/server.js:19`, `test/transfers.test.js:5-12` → vérifiés. ✓
-- **"`isFull` exportée mais non câblée"** → CODE_HOTSPOTS_AUDIT "fonction orpheline à risque de confusion — VÉRIFIÉ_CODE". ✓
-- **Domaine 3 — Exposition HTTP** : `src/server.js:1-10` (imports + createServer), `:11-23` (routage), `:5-8` (sendJson), `:14-20` (projection), `:26-29` (PORT + listen) → vérifiés. ✓
-- **Guard testabilité `src/server.js:27`** : `if (require.main === module)` → vérifié ligne 27, traçable à CODE_HOTSPOTS_AUDIT "Guard `require.main`" + ARCHITECTURE_AUDIT "Guard module.main — VÉRIFIÉ_CODE". ✓
-- **`module.exports = server` à la ligne 30** → WORKFLOW_SUITE_TESTS "serveur exporté (`src/server.js:30`)". ✓
-- **Domaine 4 — Qualité/tests** : `package.json` script test, `test/transfers.test.js:1-16` (3 tests) → vérifiés. ✓
-- **Dépendances internes** (graph server.js → transfers.js sans isFull) → vérifié `src/server.js:3`. ✓
-- **Import `{ listTransfers, seatsLeft }` sans `isFull`** → vérifié `src/server.js:3`. ✓
-- **Hotspot `src/server.js:10-23`** → CODE_HOTSPOTS_AUDIT "le callback de routage polyvalent — VÉRIFIÉ_CODE". ✓
-- **Risque "sold dépasse seats si route POST ajoutée"** → ARCHITECTURE_AUDIT "Mutation silencieuse du catalogue". ✓
-- **Évolution prévisible** (routeur nommé, copie tableau, test cardinalité) → ARCHITECTURE_AUDIT recommandations + WORKFLOW_SUITE_TESTS questions ouvertes. ✓
+- **Domaine 1 — Transport HTTP** : server.js 30 lignes, exports (`server`), imports (`listTransfers`, `seatsLeft`, `node:http`, `node:url`) — confirmés dans `ARCHITECTURE_AUDIT.md § Séparation des responsabilités`.
+- **Domaine 2 — Logique métier** : transfers.js 21 lignes, tableau littéral 3 transferts, 3 exports (`listTransfers`, `seatsLeft`, `isFull`) — confirmés dans `CODE_HOTSPOTS_AUDIT.md`, `WORKFLOW_CALCUL_DISPONIBILITE.md`.
+- **Hotspot 1 — URL Parsing** : server.js:11, TypeError, pas de try/catch, risque crash — `CODE_HOTSPOTS_AUDIT.md § Hotspot 1`, `SECURITY_ROBUSTNESS_AUDIT.md § Crash sur URL malformée`.
+- **Hotspot 2 — Référence mutable** : transfers.js:10, `return transfers` sans copie — `CODE_HOTSPOTS_AUDIT.md § Hotspot 2`, `ARCHITECTURE_AUDIT.md § Référence mutable exposée`.
+- **Hotspot 3 — isFull orpheline** : exportée non importée par server.js — `CODE_HOTSPOTS_AUDIT.md § Hotspot 3`.
+- **Diagramme de flux HTTP** : flux complet de la requête (parse URL → routeur → listTransfers → map → seatsLeft → sendJson) conforme à `WORKFLOW_LISTE_TRANSFERTS.md § Étapes principales`.
+- **Dépendances internes** : acyclique, server.js → transfers.js, test → transfers.js uniquement — `ARCHITECTURE_AUDIT.md § Compréhension globale`.
+- **Bonnes pratiques** : séparation transport/domaine, fonctions pures, guard `require.main === module`, `sendJson` centralisé — `ARCHITECTURE_AUDIT.md § Forces`.
+- **Anti-patterns** : routing inline, pas de copie défensive, pas de validation de schéma, pas d'error handling — `ARCHITECTURE_AUDIT.md § Dettes techniques`, `CODE_HOTSPOTS_AUDIT.md`.
+- **Données des 3 transferts** : valeurs précises (seats, sold, seatsLeft) — `WORKFLOW_LISTE_TRANSFERTS.md § Données`.
+- **Port et PORT env var** : port 3100, surchargeable via `PORT` — `SECURITY_ROBUSTNESS_AUDIT.md` ("La seule variable d'environnement lue est `PORT` (`src/server.js:26`)").
+- **Arborescence** : conforme à l'état réel du dépôt.
+
+---
 
 ## Recommandations de correction
 
-Aucune correction requise. La formulation corrigée au tour 2 (`src/server.js:87`) est conforme à FUNCTIONAL_AUDIT :
-> « **Pas d'appel asynchrone** : ni Promise ni callback en dehors du handler. Risque latent : aucun `try/catch` ; une exception synchrone non gérée dans `listTransfers()` ou `.map()` planterait le handler sans réponse structurée au client (`src/server.js:13-20`). » ✓
+1. **[M1]** Dans la section "Évolutions prévisibles", ajouter une note en tête : `Les éléments suivants sont des projections d'ingénierie non documentées dans les audits existants — marqués (HYPOTHÈSE).` et annoter spécifiquement "pool de connexion/cache" et "retourner une promesse" avec `(HYPOTHÈSE)`.

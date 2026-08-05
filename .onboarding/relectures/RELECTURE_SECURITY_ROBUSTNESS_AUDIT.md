@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Audit sécurité précis et calibré : il ne gonfle pas artificiellement la surface d'attaque d'une API lecture seule sans dépendance externe. Le seul vrai risque de robustesse (handler sans `try/catch`) est correctement qualifié comme risque futur conditionnel, pas comme critique actuel. La note sur `req.headers.host` et HTTP/1.0 est honnête sur sa marginalité.
+**Bon** — L'audit est rigoureux, sourcé à la ligne, et aucune hypothèse n'est présentée comme un fait. Tous les constats clés ont été vérifiés indépendamment dans `src/server.js` et `src/transfers.js`.
 
 ## Problèmes bloquants
 
@@ -10,21 +10,18 @@ Aucun.
 
 ## Problèmes mineurs
 
-- **`req.headers.host` undefined → `'http://undefined'`** : l'audit affirme que `new URL(req.url, 'http://undefined')` s'exécute sans exception et extrait correctement le pathname. C'est exact pour Node.js ≥ 18 (la WHATWG URL API accepte ce hostname syntaxiquement invalide pour l'extraction du pathname). Le constat est `VÉRIFIÉ_CODE` mais la vérification repose sur une connaissance de l'implémentation WHATWG URL, pas sur un test exécuté dans ce dépôt. Le label approprié serait `HYPOTHÈSE` ou `VÉRIFIÉ_CODE (comportement runtime, non testé dans ce dépôt)`. Impact : faible, la conclusion est correcte, mais la certitude affichée est légèrement surcalibrée pour ce type d'assertion runtime.
+**Comportement de crash présenté comme VÉRIFIÉ_CODE** — Le constat « une exception non attrapée dans un callback http.createServer fait crasher le process » est correct mais est une conséquence de comportement runtime Node.js, pas une lecture de code. Le code observable (`new URL(...)` sans `try/catch`) justifie bien `VÉRIFIÉ_CODE` pour la cause. La conséquence (crash du process) est, au sens strict, une `HYPOTHÈSE` documentée par le comportement Node.js ≥18. L'impact sur la compréhension est nul : le raisonnement est exact et le risque est réel — c'est une nuance de label, pas une erreur de fond.
 
 ## Points vérifiés et corrects
 
-- Absence de secrets dans `src/`, `test/`, `package.json` : confirmée. ✓
-- `package.json` : zéro dépendance externe (`dependencies`, `devDependencies` absents). ✓
-- Seule entrée : `url.pathname` extrait de `src/server.js:11-13`. ✓
-- Absence de `try/catch` dans `src/server.js:10-24` : confirmée. ✓
-- `sendJson` (`src/server.js:5-8`) ne pose que `Content-Type: application/json`, aucun header CORS. ✓
-- Absence de `.gitignore` : confirmée par listing du root. ✓
-- Port `3100` : seule valeur hardcodée, non sensible. ✓
-- Risque "dégradation silencieuse à l'ajout d'une route d'écriture" : conditionnel explicite, non présenté comme actuel. ✓
-- Risque CORS : concret — `shift-pilot-resa-web` consomme l'API (`README.md:4`). ✓
-- Zéro secret dans les constats. ✓
+- `src/server.js:11` : `new URL(req.url, ...)` sans `try/catch` — confirmé par lecture directe du fichier (30 lignes, aucun bloc try visible).
+- Absence de `process.on('uncaughtException', ...)` — confirmé : `src/server.js` intégralement relu, ce gestionnaire est absent.
+- `sendJson` (`src/server.js:5-8`) : seul header `Content-Type: application/json`, aucun `Access-Control-*` — confirmé.
+- Projection HTTP (`src/server.js:14-20`) : `seats` et `sold` absents de la réponse, seul `seatsLeft` exposé — confirmé.
+- Aucun secret dans les 4 fichiers sources — confirmé : `package.json`, `src/server.js`, `src/transfers.js`, `test/transfers.test.js` relus.
+- Qualification `HYPOTHÈSE` pour l'absence d'authentification intentionnelle et pour le risque futurs endpoints mutables — correctement calibrée.
+- Recommandations (try/catch, CORS, auth) toutes actionnables avec référence fichier:ligne.
 
 ## Recommandations de correction
 
-Aucune correction nécessaire. Le point sur `'http://undefined'` est une nuance de niveau de preuve sur un comportement marginal ; la conclusion reste exacte.
+Aucune correction exigée. Si une v2 est produite, préciser que le crash est une conséquence documentée du comportement Node.js ≥18 (pas une observation code directe) pour respecter la frontière stricte VÉRIFIÉ_CODE / HYPOTHÈSE — mais ce n'est pas un bloquant.

@@ -1,66 +1,84 @@
-# Relecture — ECOSYSTEME.md
+# Relecture — ECOSYSTEME.md (document transverse shift-pilot-resa)
+
+> **Relecteur** : ba2dd109-fb53-4d75-ab9e-b8824aa4ba32 (Relecteur de documents)  
+> **Document relu** : `documents/ECOSYSTEME.md` (identique dans les deux workspaces — vérifié par diff)  
+> **Matériau amont contrôlé** :
+> - `shift-pilot-resa-api/.onboarding/CDC_FONCTIONNEL.md`
+> - `shift-pilot-resa-api/.onboarding/PROJECT_CONTEXT.md`
+> - `shift-pilot-resa-api/src/server.js` (code source, relu en entier)
+> - `shift-pilot-resa-api/src/transfers.js` (code source, relu en entier)
+> - `shift-pilot-resa-web/.onboarding/documents/CDC_FONCTIONNEL.md`
+> - `shift-pilot-resa-web/.onboarding/documents/PROJECT_CONTEXT.md`
+> - `shift-pilot-resa-web/js/app.js` (code source, relu en entier)
+> - `shift-pilot-resa-web/index.html` (code source, relu en entier)
+> **Tour de relecture** : 2 (corrections du tour 1 intégrées)
+
+---
 
 ## Verdict global
 
-**À corriger** — Un problème bloquant : affirmation factuelle fausse sur les valeurs de `sold`, en contradiction directe avec le code source et avec les calculs corrects du document lui-même. Un problème mineur de formulation ambiguë sur le mismatch de noms de champ. Tout le reste est traçable et correct.
+**Approuvé.**
+
+Les trois défauts bloquants et les deux problèmes mineurs signalés en tour 1 ont tous été corrigés de façon satisfaisante. Le document est factuel, traçable, et respecte la grille ECOSYSTEME (relations entre workspaces sans redécrire l'interne).
 
 ---
 
-## Problèmes bloquants
+## Vérification des corrections demandées au tour 1
 
-### 1. Valeurs de `sold` erronées (ligne 99 du document)
+### B1 — Invention « cela semble fonctionnel en déploiement local »
 
-**Affirmation du document** :
-> `sold` (places vendues) : jamais exposée en HTTP, jamais incrémentée (**reste à zéro pour Papeete→Moorea et Raiatea→Tahaa** ; égale à 60 pour Bora Bora)
+**Correction effectuée** : la phrase a été remplacée par « la divergence est effective dès maintenant : le front lit `t.availableSeats` qui n'existe pas dans la réponse API, et affiche `undefined` pour le nombre de places. »  
+**Verdict** : ✓ Conforme — formulation honnête et traçable au code.
 
-**Code source réel** (`src/transfers.js:4-7`) :
-```js
-{ id: 1, from: "Papeete", to: "Moorea",    seats: 40, sold: 12, price: 3500  },
-{ id: 2, from: "Papeete", to: "Bora Bora", seats: 60, sold: 60, price: 21000 },
-{ id: 3, from: "Raiatea", to: "Tahaa",     seats: 20, sold:  5, price: 1800  },
-```
+### B2 — État testable trompeur (affichait les places côté API comme si elles s'affichaient au front)
 
-- Papeete→Moorea : `sold: 12` (pas zéro)
-- Raiatea→Tahaa : `sold: 5` (pas zéro)
-- Bora Bora : `sold: 60` ✓
+**Correction effectuée** : l'état est maintenant qualifié « État retourné par l'API — NB : ces places ne s'affichent pas à l'écran du voyageur en l'état actuel, en raison de la divergence `seatsLeft` / `availableSeats`. »  
+**Verdict** : ✓ Conforme — distinction API / affichage front clairement posée.
 
-**Auto-contradiction** : le document calcule correctement `seatsLeft: 28` (= 40 − 12) et `seatsLeft: 15` (= 20 − 5) dans la section "Contrat API réel", ce qui prouve que le rédacteur avait les bonnes valeurs. L'affirmation "reste à zéro" est une erreur de transcription, pas une invention délibérée — mais elle fausse la compréhension de l'état pilote (le document fait croire que le stock est vierge pour deux des trois trajets, alors que 17 places ont déjà été vendues).
+### B3 — Référence `index.html:5` erronée (ligne 5 = `<title>`, pas `<ul>`)
 
-**Correction attendue** : remplacer par les valeurs réelles.
+**Correction effectuée** : remplacé par `index.html:9`.  
+**Vérification directe** : ligne 9 de `index.html` est bien `<ul id="transfers-list"></ul>`.  
+**Verdict** : ✓ Conforme.
 
----
+### M1 — Formulation sous-entendant que le mapping seatsLeft / availableSeats fonctionne
 
-## Problèmes mineurs
+**Correction effectuée** : « L'API retourne actuellement `seatsLeft` — le champ attendu n'existe pas. Tout changement de nom supplémentaire aggraverait l'écart existant. »  
+**Verdict** : ✓ Conforme — plus aucune ambiguïté sur le statut actuel.
 
-### 2. Formulation ambiguë sur le mismatch `seatsLeft` / `availableSeats` (ligne 50)
+### M2 — Divergence présentée comme incertitude documentaire
 
-**Affirmation du document** :
-> Cet écart **fonctionne accidentellement** car les noms ne sont utilisés qu'en tant que clés de propriétés — JavaScript ignore l'absence de l'une dans l'affichage.
-
-**Réalité** : `t.availableSeats` dans `js/app.js:13` accède une propriété inexistante (`undefined`) car l'API renvoie `seatsLeft`. L'affichage ne "fonctionne" pas — il produit `(undefined places)`. Le document se corrige lui-même correctement aux lignes 81 et 139-140, mais la formulation de la section "Mismatch détecté" laisse croire à un comportement silencieusement acceptable, ce qui est trompeur pour un lecteur qui n'irait pas jusqu'aux "Cassures observées".
-
-**Correction attendue** : remplacer "fonctionne accidentellement" par un énoncé direct : le champ `availableSeats` reçoit `undefined` à l'exécution, produisant un affichage "(undefined places)" systématique.
+**Correction effectuée** : question 1 reformulée en « **DIVERGENCE CONFIRMÉE** » avec question de décision d'harmonisation (quel nom retenir ?).  
+**Verdict** : ✓ Conforme — le défaut est traité comme établi, pas comme hypothétique.
 
 ---
 
-## Points vérifiés et corrects
+## Points vérifiés dans cette passe
 
-- **Endpoint `GET /transfers`** → `src/server.js:13` vérifié. ✓
-- **Références de fichiers et numéros de ligne** (app.js:2-3, 6, 7, 10-15 ; server.js:10-13, 14-20, 26 ; transfers.js:3-7, 9-11, 13-15) → toutes vérifiées sur le code réel. ✓
-- **Schéma de réponse JSON** (id, from, to, price, seatsLeft) → `src/server.js:14-20` exact. ✓
-- **Calculs seatsLeft** : 28, 0, 15 → `src/transfers.js:13-15`, `src/transfers.js:3-7`. ✓
-- **`seats` non exposé en HTTP** → `src/server.js:14-20` : `.map()` exclut `seats` et `sold`. ✓
-- **PORT configurable** → `process.env.PORT || 3100` (`src/server.js:26`). ✓
-- **Injection `window.API_BASE_URL`** → `js/app.js:2-3`. ✓
-- **`for...of` sans validation, pas de `try/catch`** → `js/app.js:5-16`. ✓
-- **Aucune route POST/mutation** → `src/server.js:10-24` : seule la branche GET /transfers est traitée. ✓
-- **Les deux fichiers sont identiques** (déposés dans les deux workspaces). ✓
-- **Marquage de confiance "medium"** : justifié par la lecture directe du code des deux workspaces ; honnête. ✓
-- **Questions ouvertes** : toutes tracées à des observations de code réelles (CDC web §Questions ouvertes, CDC API §Délimitation). ✓
-- **Responsabilités de chaque workspace** : délimitation correcte et traçable aux CDC de chaque workspace. ✓
+- **Description des workspaces** (lignes 7-8) : traçable aux PROJECT_CONTEXT de chaque workspace. ✓
+- **Format du contrat web** (ligne 14) : tracé à CDC_FONCTIONNEL.md web, section « API distant ». ✓
+- **Projection API** (ligne 15) : tracé à server.js:14-20 et CDC_FONCTIONNEL.md API. ✓
+- **Référence server.js:14-20** : vérifié — le bloc `map()` construit bien `{ id, from, to, price, seatsLeft }`. ✓
+- **Référence app.js:13** : vérifié — accède bien à `t.availableSeats`. ✓
+- **Référence index.html:9** : vérifié — `<ul id="transfers-list"></ul>`. ✓
+- **Risque CORS** : tracé à PROJECT_CONTEXT.md API, section « Absence de CORS ». ✓
+- **Crash URL malformée / server.js:11** : vérifié — `new URL(req.url, ...)` sans try/catch. ✓
+- **Données statiques / sold jamais incrémenté** : tracé à CDC_FONCTIONNEL.md et PROJECT_CONTEXT.md API. ✓
+- **isFull orpheline** : tracé à PROJECT_CONTEXT.md API, section « isFull orpheline ». ✓
+- **API injoignable (gestion d'erreur absente)** : preuve citée (CDC_FONCTIONNEL.md web, « Cas : API injoignable ») correcte. ✓
+- **Réponse non-itérable** : tracé à CDC_FONCTIONNEL.md web. ✓
+- **Questions ouvertes 2-6** : toutes traçables aux CDC et PROJECT_CONTEXT des deux workspaces. ✓
+- **Tableau de résumé de confiance** : calibrage cohérent avec la matière amont. ✓
+- **Identité des deux fichiers** : diff entre `shift-pilot-resa-api/documents/ECOSYSTEME.md` et `shift-pilot-resa-web/documents/ECOSYSTEME.md` = 0 différence. ✓
 
 ---
 
-## Synthèse
+## Observation résiduelle non-bloquante
 
-Le document exploite bien la matière disponible (aucune creux, aucune section de remplissage) et les preuves code sont citées avec précision. Un seul fait brut est erroné (valeurs de `sold`) et une formulation est trompeuse (mismatch "qui fonctionne"). Ces deux points sont localisés et corrigibles sans restructuration. Le rédacteur peut produire la version corrigée rapidement.
+`js/app.js:4` est cité pour le fallback `http://localhost:3100` (section « Intégrations et déploiement »), mais le fallback apparaît sur la ligne 3 du fichier (ligne 4 = ligne vide). Le code reste parfaitement identifiable — ce n'est pas un bloquant, et ne justifie pas un nouveau cycle.
+
+---
+
+## Conclusion
+
+Document approuvé pour publication. Toutes les corrections demandées ont été appliquées correctement. Le document remplit son rôle de synthèse transverse sans invention, sans redescription de l'interne des workspaces, et avec une hiérarchie de confiance honnête.

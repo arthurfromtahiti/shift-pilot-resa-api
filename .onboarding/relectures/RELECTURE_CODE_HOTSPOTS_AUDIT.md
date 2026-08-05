@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Audit honnête sur l'absence de points chauds classiques, qui recadre correctement l'analyse sur les zones de croissance future plutôt que sur des pathologies inexistantes. Tous les constats sont `VÉRIFIÉ_CODE` avec référence précise. Aucun défaut bloquant.
+**Bon** — Les trois hotspots identifiés sont réels, sourcés à la ligne, et correctement hiérarchisés. La complexité cyclomatique est évaluée correctement. Le lien avec les workflows documentés est pertinent et vérifiable.
 
 ## Problèmes bloquants
 
@@ -10,18 +10,19 @@ Aucun.
 
 ## Problèmes mineurs
 
-- **Décalage de statut pour `sendJson`** : le constat "pas importable/partageable sans passer par `server.js`" (`src/server.js:5-8`) est présenté sans statut de preuve explicite dans la phrase. Il s'agit d'un `VÉRIFIÉ_CODE` (la fonction est déclarée dans `server.js` et non exportée) — la preuve est dans le code, mais le label est absent de cette sous-phrase. Impact : faible, le contexte rend la nature du constat évidente.
+**Légère incohérence de décompte** — L'audit annonce « 3 fichiers source » dans le résumé global, alors que `ARCHITECTURE_AUDIT.md` parle de « 2 fichiers source ». La différence tient à l'inclusion ou non du fichier de test (`test/transfers.test.js`). Les deux formulations sont défendables ; noter qu'elles sont dans deux documents distincts, donc sans impact sur la cohérence interne de chacun. Ce n'est pas un défaut de preuve.
 
 ## Points vérifiés et corrects
 
-- `src/server.js:10-23` — 7 responsabilités dans 14 lignes : liste vérifiée contre le code réel (URL parsing, routage, listTransfers, map, seatsLeft, sendJson, 404). ✓
-- `src/transfers.js:3-7` — seul état de l'application. ✓
-- `sendJson` utilisée à `src/server.js:14` et `src/server.js:23` : confirmé. ✓
-- `src/server.js:31` lignes, `src/transfers.js:22` lignes, `test/transfers.test.js:17` lignes : décompte exact. ✓
-- `isFull` — exportée `src/transfers.js:21` mais non importée dans `src/server.js:3` : confirmé. ✓
-- Couplage unique `src/server.js:3 → ./transfers` : vérifié, pas de dépendance circulaire. ✓
-- Zéro secret dans les constats. ✓
+- Hotspot 1 — `src/server.js:11` : `new URL(req.url, ...)` sans `try/catch`, confirmé. Lien correct avec `WORKFLOW_LISTE_TRANSFERTS` (unique workflow HTTP).
+- Hotspot 2 — `src/transfers.js:9-11` : `return transfers` sans copie, confirmé. Lien correct avec `WORKFLOW_CALCUL_DISPONIBILITE`.
+- Hotspot 3 — `isFull` exportée (`src/transfers.js:17-21`) mais absente de `src/server.js:3` — confirmé. Usage uniquement dans `test/transfers.test.js:3` — confirmé.
+- Complexité cyclomatique : `sendJson`, `listTransfers`, `seatsLeft`, `isFull` toutes à 0 branche ; handler HTTP à 1 branche — exact.
+- Absence de code mort au sens strict (tous les exports sont consommés quelque part) — exact, avec la nuance correctement apportée que `isFull` n'est consommée que par le test.
+- `HYPOTHÈSE` correctement posé sur l'intention préparatoire de `isFull` — aucune documentation ne le confirme.
+- Guard `require.main === module` (`src/server.js:27`) — confirmé.
+- Aucun secret.
 
 ## Recommandations de correction
 
-Aucune correction nécessaire. Le manque de label de preuve sur une sous-phrase de `sendJson` est cosmétique.
+Aucune. La légère incohérence de décompte est anecdotique et ne nécessite pas de correction.

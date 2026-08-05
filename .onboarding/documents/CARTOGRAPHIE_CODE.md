@@ -1,289 +1,279 @@
 # CARTOGRAPHIE_CODE — shift-pilot-resa-api
 
-> **Confiance : high** — sources : lecture directe des fichiers source, structure du projet, et grep.
+Cartographie technique : structure de domaine, fichiers, points d'entrée, zones critiques.
+
+> Confiance : high
 
 ## Vue d'ensemble
 
-```
-shift-pilot-resa-api/
-├── src/
-│   ├── server.js         (843 bytes) — couche HTTP
-│   └── transfers.js      (586 bytes) — données métier + calculs
-├── test/
-│   └── transfers.test.js (400 bytes) — 3 tests unitaires
-├── package.json          — configuration Node.js
-├── README.md             — documentation utilisateur
-└── .onboarding/          — documents de synthèse (ce workspace)
-```
+Deux fichiers source (~51 lignes), une architecture bipartite :
+- `src/server.js` (30 lignes) — transport HTTP, routage, sérialisation JSON.
+- `src/transfers.js` (21 lignes) — logique métier, catalogue de données.
 
-**Total code source** : ~1,4 Ko répartis sur 2 fichiers métier (server.js + transfers.js).  
-**Architecture** : Séparation nette HTTP / Métier — pas de framework, modules natifs Node.js uniquement.
+Pas de framework, pas de ORM, pas de middleware. Séparation volontaire des responsabilités ; testabilité préservée via `require.main === module`.
 
 ---
 
 ## Domaines et fichiers
 
-### 1. Catalogue des transferts inter-îles
+### Domaine 1 : Transport HTTP et routage
 
-**Domaine métier** : gestion de la liste des trajets disponibles avec leurs caractéristiques (prix, capacité, occupation).
+**Responsabilité** : recevoir requêtes HTTP, les valider, les router, et retourner des réponses JSON.
 
-| Aspect | Fichier | Lignes | Détail |
-|--------|---------|--------|--------|
-| **Données** | `src/transfers.js` | 3–7 | Tableau `const transfers` : 3 objets { id, from, to, seats, sold, price } |
-| **Lecture** | `src/transfers.js` | 9–11 | Fonction `listTransfers()` : retourne le tableau brut |
-| **Calcul places** | `src/transfers.js` | 13–15 | Fonction `seatsLeft(t)` : retourne `t.seats - t.sold` |
-| **Test métier** | `test/transfers.test.js` | 14–16 | Test 3 : vérifie `listTransfers().length === 3` |
-| **Exposition HTTP** | `src/server.js` | 14–20 | Projection de réponse : `.map()` vers `{ id, from, to, price, seatsLeft }` |
+**Fichiers** :
+- `src/server.js` (30 lignes) — unique fichier du domaine.
 
-**Points clés** :
-- Les données sont **hardcodées en mémoire**, aucune persistance.
-- Trois trajets fixes : Papeete↔Moorea, Papeete↔Bora Bora, Raiatea↔Tahaa.
-- `seatsLeft` est **calculé à la volée** (pas de cache) ; chaque requête appelle la fonction.
-- Bora Bora est initialisé avec `sold: 60` (complet) — artefact intentionnel, jamais modifié en runtime.
+**Exports** :
+- `server` (objet `http.Server`) — exporté via `module.exports` (ligne 30) ; utilisé par les tests et le runtime.
 
-**Risques de croissance** :
-- Ajouter un 4e transfert casse le test `listTransfers().length === 3`.
-- Aucune validation des invariants (`sold <= seats`, `price >= 0`) — risque latent si une route d'écriture est ajoutée.
+**Imports** :
+- `listTransfers, seatsLeft` depuis `./transfers` (ligne 3) — fonctions métier consommées.
+- `http.createServer` depuis `node:http` (ligne 1) — module Node natif.
+- `URL` depuis `node:url` (ligne 2) — parsing d'URL.
 
----
+**Points critiques** :
+- Ligne 11 : `new URL(req.url, \`http://${req.headers.host}\`)` — parsing sans try/catch. Risque crash.
+- Ligne 13 : routage inline sur `url.pathname === "/transfers" && req.method === "GET"`. Pas scalable au-delà de 2-3 routes.
+- Ligne 5-8 : fonction `sendJson(res, status, body)` — centralise la sérialisation JSON et l'en-tête `Content-Type: application/json`.
 
-### 2. Disponibilité et places (occupation)
-
-**Domaine métier** : suivi du remplissage de chaque transfert — combien de places restent libres.
-
-| Aspect | Fichier | Lignes | Détail |
-|--------|---------|--------|--------|
-| **Champs de stock** | `src/transfers.js` | 3–7 | `seats` (capacité), `sold` (vendues) dans chaque objet Transfer |
-| **Calcul** | `src/transfers.js` | 13–15 | `seatsLeft(t) = t.seats - t.sold` |
-| **Détection complétion** | `src/transfers.js` | 17–19 | Fonction `isFull(t)` : retourne `seatsLeft(t) === 0` |
-| **Exposition HTTP** | `src/server.js` | 19 | `seatsLeft` inclus dans chaque objet de réponse |
-| **Test métier** | `test/transfers.test.js` | 5–12 | Tests 1 & 2 : `seatsLeft()` et `isFull()` |
-
-**Points clés** :
-- `seatsLeft` est la **seule donnée d'occupation** exposée au client (l'API masque `seats` et `sold`).
-- `isFull()` est **exportée et testée**, mais **non câblée à la route HTTP** — une décision préalable à toute évolution.
-- `sold` n'est jamais incrémenté : le stock est **figé à sa valeur initiale**.
-
-**Confiance** : medium (domaine validé en code, mais jamais observé en runtime — données statiques, pas de route d'écriture).
+**Zones à ne pas casser** :
+- La séparation entre le routing logic et le business logic (import de `listTransfers` et `seatsLeft` seulement).
+- L'export de `server` lui-même (utilisé par les tests pour importer et tester le serveur).
+- Le guard `require.main === module` (ligne 27) qui permet une testabilité modulaire.
 
 ---
 
-### 3. Exposition HTTP de l'API
+### Domaine 2 : Logique métier et données
 
-**Domaine technique** : couche serveur, routage, sérialisation, gestion des erreurs.
+**Responsabilité** : fournir primitives de calcul (`seatsLeft`, `isFull`) et accès au catalogue de transferts (`listTransfers`).
 
-| Aspect | Fichier | Lignes | Détail |
-|--------|---------|--------|--------|
-| **Serveur** | `src/server.js` | 1–10 | Import modules natifs, création du serveur `http.createServer` |
-| **Routage** | `src/server.js` | 11–23 | Parsing URL, vérification `pathname === "/transfers" && method === "GET"`, cas défaut 404 |
-| **Sérialisation** | `src/server.js` | 5–8 | Fonction `sendJson(res, status, body)` : fixe headers et envoie JSON |
-| **Projection** | `src/server.js` | 14–20 | Transformation des données : `.map()` avec exclusion de `seats`/`sold`, inclusion de `seatsLeft` |
-| **Démarrage** | `src/server.js` | 26–29 | `server.listen(port, ...)` avec port configurable `process.env.PORT || 3100` |
-| **Guard testabilité** | `src/server.js` | 27 | `if (require.main === module)` empêche le démarrage lors des imports en test |
+**Fichiers** :
+- `src/transfers.js` (21 lignes) — unique fichier du domaine.
 
-**Points clés** :
-- **Une seule route** : `GET /transfers` (`src/server.js:13`).
-- **Pas de framework** : routage manual par `if` sur pathname/méthode.
-- **Pas d'appel asynchrone** : ni Promise ni callback en dehors du handler. Risque latent : aucun `try/catch` ; une exception synchrone non gérée dans `listTransfers()` ou `.map()` planterait le handler sans réponse structurée au client (`src/server.js:13-20`).
-- **Port configurable** : `process.env.PORT || 3100` (`src/server.js:26`) — déploiement sans modification du code.
+**Données** :
+- `transfers` (ligne 3-7) — tableau littéral en mémoire, 3 objets (`id, from, to, seats, sold, price`).
+  - id 1 : Papeete→Moorea, 40 places, 12 vendues, 3500 XPF → `seatsLeft: 28`.
+  - id 2 : Papeete→Bora Bora, 60 places, 60 vendues, 21000 XPF → `seatsLeft: 0` (saturé).
+  - id 3 : Raiatea→Tahaa, 20 places, 5 vendues, 1800 XPF → `seatsLeft: 15`.
 
-**Risque structurel** : la forme actuelle du callback (un seul `if`, suivi du défaut 404) ne passe pas à l'échelle au-delà de 2–3 routes. La deuxième route accumule la logique dans le même callback — signal pour introduire un routeur nommé avant d'ajouter trop de routes.
+**Exports** :
+- `listTransfers` (ligne 9-11) — retourne `transfers` directement (pas de copie).
+- `seatsLeft` (ligne 13-15) — calcule places restantes (`seats - sold`).
+- `isFull` (ligne 17-19) — prédicat de saturation (`seatsLeft === 0`).
 
----
+**Imports** : aucun. Module autonome.
 
-### 4. Qualité et tests
+**Points critiques** :
+- Ligne 10 : `return transfers` — retourne référence interne, pas une copie. Vecteur de mutation accidentelle.
+- Ligne 14 : `transfer.seats - transfer.sold` — aucune validation que `sold ≤ seats`. Peut retourner un nombre négatif silencieusement.
+- Ligne 18 : `seatsLeft(transfer) === 0` — appelle `seatsLeft` ; pas de duplication de la règle, réutilisation correcte.
+- Ligne 21 : `isFull` exportée mais non importée dans `server.js` (voir ligne 3 : seuls `listTransfers` et `seatsLeft` importés).
 
-**Domaine technique** : vérification de la logique métier.
-
-| Aspect | Fichier | Lignes | Détail |
-|--------|---------|--------|--------|
-| **Lanceur** | `package.json` | script `test` | `"test": "node --test test/"` |
-| **Runner** | `test/transfers.test.js` | 1–2 | Imports natifs : `node:test`, `node:assert/strict` (Node.js ≥ 18) |
-| **Test 1 — seatsLeft** | `test/transfers.test.js` | 5–7 | Fixture : `{ seats: 40, sold: 12 }` → espère 28 ✓ |
-| **Test 2 — isFull** | `test/transfers.test.js` | 9–12 | Deux cas : complet (true), non-complet (false) ✓ |
-| **Test 3 — cardinalité** | `test/transfers.test.js` | 14–16 | Vérifie `listTransfers().length === 3` ✓ |
-
-**Points clés** :
-- Tests unitaires **logique pure** — aucune dépendance externe (pas de base, pas de serveur HTTP).
-- Aucun test de la route HTTP — pas de couverture du routage, de la sérialisation, ou de la réponse.
-- `isFull()` est testée ici mais **non importée dans `src/server.js`** — logique testée mais morte en runtime.
-- Le test 3 casse dès qu'un 4e transfert est ajouté (hard-codage de `=== 3`).
-
-**Confiance** : low (pour la couverture fonctionnelle globale) — tests logique pure seulement, pas d'intégration.
+**Zones à ne pas casser** :
+- La fonction `seatsLeft(t)` : elle est la source unique de la règle de calcul de disponibilité. Toute évolution doit passer par elle.
+- L'existence du tableau `transfers` à l'adresse `src/transfers.js:3-7` (les tests y font référence indirectement via `listTransfers()`).
+- L'export de `isFull` : même si non câblé actuellement, son existence est observée dans `test/transfers.test.js:3`.
 
 ---
 
-## Points d'entrée par parcours
+## Points d'entrée du service
 
-### Parcours 1 : Consultation du catalogue (client web)
+### HTTP
+- **Route** : `GET /transfers` (`server.js:13`)
+- **Logique** : appelle `listTransfers()` (`server.js:14`), puis projette chaque transfert (`server.js:14-20`) en appelant `seatsLeft(t)` pour calculer la disponibilité.
+- **Réponse** : JSON array de 3 objets projetés, statut 200.
+- **Fallback** : tout autre verbe/route retourne 404 (`server.js:23`).
+
+### Démarrage du process
+- **Entry** : `node src/server.js` (lancé si `require.main === module` à la ligne 27)
+- **Port** : défaut 3100, surchargeable via env var `PORT` (`server.js:26`)
+- **Output** : log console `"resa-api on :3100"` (`server.js:28`)
+
+### Tests
+- **Runner** : `npm test` → `node --test test/` (`package.json:6`)
+- **Fichier test** : `test/transfers.test.js` (16 lignes)
+- **Importe** : `{ listTransfers, seatsLeft, isFull }` depuis `../src/transfers` (ligne 3)
+- **Ne teste que** : `listTransfers()`, `seatsLeft()`, `isFull()`. Zéro test HTTP du serveur.
+
+---
+
+## Flux d'une requête HTTP
 
 ```
-GET /transfers
-   ↓
-src/server.js:10-23 (callback du serveur)
-   ├─ Parsing URL : new URL(req.url, ...)
-   ├─ Routage : if (pathname === "/transfers" && method === "GET")
-   ├─ Appel : listTransfers() → src/transfers.js:9-11
-   ├─ Calcul : .map() → seatsLeft(t) → src/transfers.js:13-15
-   ├─ Projection : { id, from, to, price, seatsLeft }
-   └─ Sérialisation : sendJson() → src/server.js:5-8
-      → HTTP 200 + JSON
+Client HTTP → new request
+       ↓
+   server.js:10 (createServer callback)
+       ↓
+   server.js:11 (parse URL) ← RISQUE CRASH (no try/catch)
+       ↓
+   server.js:13 (test pathname === "/transfers" && method === "GET")
+       ├─ YES → server.js:14-20
+       │        ├─ listTransfers() [transfers.js:9-11]
+       │        │  └─ returns [t1, t2, t3]
+       │        ├─ for each t: map to projection
+       │        │  └─ seatsLeft(t) [transfers.js:13-15]
+       │        │     └─ return t.seats - t.sold
+       │        ├─ sendJson(res, 200, projectedArray) [server.js:5-8]
+       │        │  └─ res.writeHead(200, { "Content-Type": "application/json" })
+       │        │  └─ res.end(JSON.stringify(...))
+       │        └─ return (end of handler)
+       │
+       ├─ NO → server.js:23
+       │       └─ sendJson(res, 404, { error: "Not found" })
+       │          └─ return
+       ↓
+   Response sent to client
 ```
-
-**Fichiers engagés** : `src/server.js` (l'intégralité), `src/transfers.js:3-15`.
-
-### Parcours 2 : Exécution des tests
-
-```
-npm test (package.json)
-   ↓
-node --test test/transfers.test.js
-   ├─ Import modules : node:test, node:assert/strict
-   ├─ Import métier : ../src/transfers
-   ├─ Test 1 : seatsLeft() → src/transfers.js:13-15
-   ├─ Test 2 : isFull() → src/transfers.js:17-19
-   ├─ Test 3 : listTransfers().length → src/transfers.js:9-11 + src/transfers.js:3-7
-   └─ Rapport : code 0 (succès) ou ≠ 0 (échec)
-```
-
-**Fichiers engagés** : `test/transfers.test.js` (l'intégralité), `src/transfers.js` (l'intégralité).
 
 ---
 
-## Zones critiques et hotspots
-
-### 1. Callback du serveur `src/server.js:10-23`
-
-**Pourquoi c'est critique** : toute la logique du serveur converge ici :
-- Parsing de l'URL
-- Routage (vérification du chemin + méthode)
-- Appel à la logique métier
-- Projection de la réponse
-- Sérialisation JSON
-
-**Risque** : Accumulation rapide de logique. Dès la deuxième route, ce callback devient le point d'accès unique pour toute nouvelle fonctionnalité. Aucune abstraction de routeur.
-
-**Action préventive** : Si une nouvelle route est ajoutée, introduire une couche de routage (même minimale : `Map` ou `switch`) avant d'ajouter trop de logique inline.
-
-### 2. Tableau `transfers` `src/transfers.js:3-7`
-
-**Pourquoi c'est critique** : source unique de vérité pour le catalogue.
-- Trois enregistrements hardcodés.
-- Aucune validation d'invariants.
-- Aucune persistance.
-- Champ `sold` jamais mis à jour en runtime.
-
-**Risque** : 
-- Ajouter un 4e trajet casse le test 3 (`listTransfers().length === 3`).
-- Si une route POST est ajoutée, `sold` peut dépasser `seats` sans validation → `seatsLeft` négatif.
-
-**Action préventive** :
-- Introduire une validation (`sold <= seats`, `price >= 0`) avant toute route d'écriture.
-- Faire une copie du tableau dans `listTransfers()` plutôt que de retourner la référence directe.
-- Décider : test 3 doit-il vérifier `listTransfers().length === 3` (donnée figée) ou `listTransfers().length > 0` (comportement)?
-
-### 3. Fonction `isFull` `src/transfers.js:17-19`
-
-**Pourquoi c'est un hotspot** : logique implémentée et testée, mais jamais exposée HTTP.
-- Permet de détecter les transferts complets.
-- Non importée dans `src/server.js`.
-- Absent de la réponse API.
-
-**Risque** : confusion — un développeur découvrant cette fonction se demandera pourquoi elle existe si elle n'est pas utilisée. Réponse supposée : préparation pour un filtrage futur ou logique en attente de décision.
-
-**Action préventive** : Clarifier son rôle avant d'ajouter une nouvelle route. Soit l'exposer, soit la retirer.
-
----
-
-## Dépendances
-
-### Dépendances externes
-
-- **`node:http`** (`src/server.js:1`) : module natif Node.js pour le serveur HTTP.
-- **`node:url`** (`src/server.js:2`) : module natif pour parser les URLs.
-- **`node:test`** (`test/transfers.test.js:1`) : runner de tests natif (Node.js ≥ 18).
-- **`node:assert/strict`** (`test/transfers.test.js:2`) : assertions pour les tests.
-
-**Aucune dépendance npm** : `package.json` ne déclare aucune `dependency` ni `devDependency`.
-
-### Dépendances internes
+## Dépendances internes
 
 ```
-src/server.js
-   ├─ import { listTransfers, seatsLeft } from ./transfers
-   └─ (n'importe pas : isFull)
+server.js
+  ├── imports from transfers.js: listTransfers, seatsLeft
+  └── node:http, node:url (stdlib)
 
-src/transfers.js
-   └─ (export : listTransfers, seatsLeft, isFull)
+transfers.js
+  └── (no imports; self-contained)
 
 test/transfers.test.js
-   └─ import { listTransfers, isFull, seatsLeft } from ../src/transfers
+  ├── imports from ../src/transfers: listTransfers, seatsLeft, isFull
+  ├── node:test, node:assert/strict (stdlib)
+  └── (never imports server.js)
 ```
 
-**Observation clé** : `src/server.js` n'importe que `listTransfers` et `seatsLeft` — `isFull` existe mais est morte côté HTTP.
+Pas de dépendance circulaire. Architecture acyclique.
 
 ---
 
-## Fichiers à connaître
+## Zones critiques — dettes et risques
 
-| Chemin | Taille | Rôle | Lecture essentielle |
-|--------|--------|------|---------------------|
-| `src/server.js` | 843 b | Couche HTTP, routage, sérialisation | Oui — point d'entrée unique |
-| `src/transfers.js` | 586 b | Données, logique métier, calculs | Oui — source de vérité métier |
-| `test/transfers.test.js` | ~400 b | Suite de tests unitaires | Oui — comprendre la couverture et les limites |
-| `package.json` | ~300 b | Config Node.js, scripts, engines | Oui — pour reproduire l'env de dev |
-| `README.md` | ~200 b | Description utilisateur (simple) | Oui — contexte et limites documentées |
-
----
-
-## Évolution prévisible (signaux)
-
-### Si une 2e route est ajoutée
-
-**Symptôme** : accumuler la logique dans `src/server.js:10-23` par un `else if` supplémentaire.
-
-**Prévention** : introduire un routeur nommé avant la deuxième route.
-
-**Exemple** :
+### Hotspot 1 : URL Parsing sans protection (`server.js:11`)
 ```javascript
-const routes = {
-  'GET /transfers': () => { /* logique ici */ },
-  'POST /transfers': () => { /* nouvelle logique */ }
-};
-const key = `${req.method} ${url.pathname}`;
-const handler = routes[key];
+const url = new URL(req.url, `http://${req.headers.host}`);
 ```
+**Risque** : `TypeError: Invalid URL` sur requête malformée (HTTP/0.9, proxy CONNECT, fuzzer) → crash de process.
+**Impact** : service entier inaccessible.
+**Recommandation** : entourer dans `try/catch`, retourner `400 Bad Request` sur exception.
 
-### Si `sold` doit être mis à jour
-
-**Symptôme** : ajouter une route POST pour créer une réservation.
-
-**Prévention** :
-1. Implémenter une validation : `sold <= seats`, `price >= 0`.
-2. Protéger `transfers` contre la mutation directe → copie dans `listTransfers()`.
-3. Introduire une couche de sérialisation de données (transformation modèle interne → réponse API).
-
-### Si le test 3 doit grandir
-
-**Symptôme** : ajouter plus de 3 transferts, le test casse (`listTransfers().length === 3`).
-
-**Prévention** : changer le test pour vérifier le comportement, pas la donnée figée.
+### Hotspot 2 : Référence mutable exposée (`transfers.js:10`)
 ```javascript
-// Mauvais :
-assert.equal(listTransfers().length, 3)  // casse si on ajoute un 4e trajet
+function listTransfers() {
+  return transfers;  // direct reference, not a copy
+}
+```
+**Risque** : futur code qui muterait un objet du tableau retourné (`listTransfers()[0].sold = 999`) mute l'état global du module, silencieusement, sans log.
+**Impact** : corruption d'état observable à l'insu des autres requêtes.
+**Recommandation** : retourner `[...transfers]` ou `transfers.slice()` pour une copie shallow.
 
-// Bon :
-assert.ok(listTransfers().length > 0)    // teste que listTransfers retourne quelque chose
+### Hotspot 3 : `isFull` orpheline (`transfers.js:17-21`)
+```javascript
+function isFull(transfer) {
+  return seatsLeft(transfer) === 0;
+}
+module.exports = { listTransfers, seatsLeft, isFull };  // exported
+```
+**Réalité** : `isFull` est exportée mais **non importée** par `server.js` (ligne 3 : seuls `listTransfers` et `seatsLeft`).
+
+**Risque** : un développeur qui ajoute un filtre « transferts complets » ou un blocage de réservation sur saturé peut réécrire la règle `seatsLeft(t) === 0` indépendamment, créant une divergence silencieuse.
+**Recommandation** : importer et câbler `isFull` si elle est destinée à filtrer ou bloquer ; sinon, ajouter un commentaire JSDoc expliquant son rôle préparatoire.
+
+### Risque latent : Données mutables via `listTransfers()`
+À ne pas casser : si `listTransfers()` commence à être appelé par un futur endpoint de réservation qui veut incrémenter `sold`, l'absence de copie défensive devient une vulnérabilité d'état global. Une migration vers une BD ou un cache synchronisé sera plus facile si `listTransfers()` retourne déjà une copie (contrat d'API clairement défini).
+
+---
+
+## Fichiers de support
+
+### Configuration et démarrage
+- `package.json` (7 lignes) — définit dépendances (zéro), test script, engine Node ≥18.
+  - **Script** : `test` = `node --test test/`
+  - **Défaut** : pas de script `start` ; démarrage manuel requis.
+  
+- `README.md` (8 lignes) — description et stack du projet.
+
+### Fichier de test
+- `test/transfers.test.js` (16 lignes) — 3 tests unitaires des fonctions pures.
+  - Zéro test HTTP (serveur non testé).
+
+---
+
+## Arborescence complète
+
+```
+shift-pilot-resa-api/
+├── src/
+│   ├── server.js         (30 lines) ← Transport HTTP, routage
+│   └── transfers.js      (21 lines) ← Logique métier, données
+├── test/
+│   └── transfers.test.js (16 lines) ← Tests unitaires (pas de test HTTP)
+├── package.json          (7 lines)  ← Config, dépendances (zéro), scripts
+├── README.md             (8 lines)  ← Description du projet
+└── .onboarding/
+    ├── workflows/        ← Audit des workflows (amont)
+    ├── audits/           ← Audits complets (amont)
+    └── (documents de synthèse ← YOU ARE HERE)
 ```
 
 ---
 
-## Vérification rapide (checklist pour un senior)
+## Modules Node.js utilisés
 
-- [ ] `src/server.js` : une seule route, routage par `if`, pas de framework — OK pour pilote.
-- [ ] `src/transfers.js` : données hardcodées, aucune persistance, aucune écriture — OK pour pilote.
-- [ ] `test/transfers.test.js` : couverture logique pure seulement, pas de test HTTP — à étendre si évolution.
-- [ ] Aucune `isFull` exposée HTTP — clarifier avant évolution.
-- [ ] `sold` de Bora Bora = capacité (complet) — intentionnel ou artefact ? À documenter ou corriger.
-- [ ] Zéro dépendance externe — maintenance minimale.
+- `node:http` — `http.createServer()` (`server.js:1`) pour écouter le port HTTP.
+- `node:url` — `URL` constructor (`server.js:2`) pour parser les URLs de requête.
+- `node:test` — test runner natif (`package.json:6`, `test/transfers.test.js:1`).
+- `node:assert/strict` — assertions strictes (`test/transfers.test.js:2`).
 
+**Zéro dépendance externe** (`package.json:7` vide).
+
+---
+
+## Bonnes pratiques et anti-patterns
+
+### Bonnes pratiques observées
+- Séparation transport/domaine claire.
+- Fonctions pures (logique métier sans I/O ni state mutation).
+- Guard `require.main === module` → testabilité par construction.
+- Centralization de `sendJson` (une seule source de vérité pour la sérialisation HTTP).
+
+### Anti-patterns visibles
+- **Routing inline** : `if/else` dans le handler (`server.js:13-23`). Non scalable.
+- **Pas de copie défensive** : `listTransfers()` expose la référence interne.
+- **Aucune validation de schéma** : le contrat des objets `transfer` est implicite.
+- **Pas de error handling** : URL parsing, requête malformée → crash du process.
+
+---
+
+## Évolutions prévisibles et points d'accroche
+
+### Ajout d'un endpoint de réservation
+Requiert :
+1. Modifier `server.js` pour router `POST /bookings` (ou autre).
+2. Créer une nouvelle fonction métier qui incrémente `sold` (`seatsLeft` en dépend déjà).
+3. **Critique** : décider si `sold` est muté en mémoire ou via une BD/cache externe.
+4. Importer et utiliser `isFull` pour bloquer les réservations sur transferts saturés.
+5. Ajouter tests HTTP pour la réservation.
+
+### Passage en base de données
+Requiert :
+1. Remplacer le tableau littéral `transfers` par un appel DB.
+2. Possiblement ajouter un pool de connexion/cache.
+3. Adapter `listTransfers()` pour retourner une promesse (changement d'API).
+4. Ré-examiner le risque de référence mutable (moins critique si BD read-only).
+
+### Ajout d'authentification
+Requiert :
+1. Middleware ou guard pour vérifier un token/session avant chaque endpoint mutable.
+2. Laisser `GET /transfers` public ou restreindre aussi (à décider).
+
+---
+
+## Confiance et vérification
+
+- **Code source** : 100% relu ligne à ligne.
+- **Workflows** : 2 workflows couvrent les cas d'usage (LISTE_TRANSFERTS, CALCUL_DISPONIBILITE).
+- **Audits** : 6 audits complets (FUNCTIONAL, ARCHITECTURE, DATA_MODEL, SECURITY, CODE_HOTSPOTS, TESTING).
+- **Cohérence** : aucune divergence entre code et documentation observée.
+
+**Résultat** : Vue technique exhaustive et fiable pour naviguer le codebase et le modifier en toute confiance.

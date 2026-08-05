@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Audit du modèle de données rigoureux et honnête : le schéma est décrit avec précision, les absences de contraintes sont correctement qualifiées en `HYPOTHÈSE`, les risques conditionnels sont explicitement posés comme tels ("si une route POST est ajoutée"). La table récapitulative des champs est un excellent ajout de lisibilité.
+**Bon** — Le modèle de données est décrit avec exactitude, les valeurs citées correspondent au code source, et les risques (mutation, sold figé, absence de validation) sont correctement qualifiés. La référence à `RELECTURE_WORKFLOW_CALCUL_DISPONIBILITE.md` est valide (fichier existant dans `.onboarding/relectures/`).
 
 ## Problèmes bloquants
 
@@ -10,21 +10,24 @@ Aucun.
 
 ## Problèmes mineurs
 
-- **"sold sans chemin d'écriture — VÉRIFIÉ_CODE. Recherche `grep -niE "sold\s*=" src/`"** : la commande grep citée est présentée comme la preuve, mais le résultat de cette recherche n'est pas reproduit verbatim dans l'audit (seule la conclusion est donnée). La règle `VÉRIFIÉ_CODE` recommande `fichier:ligne`. En l'occurrence, les seules occurrences de `sold` dans `src/` sont `src/transfers.js:4`, `src/transfers.js:5`, `src/transfers.js:6` (déclaration initiale) et `src/transfers.js:14` (dans `seatsLeft = seats - sold`). La conclusion reste exacte ; la preuve est vérifiable. Mineure.
+Aucun.
 
 ## Points vérifiés et corrects
 
-- Table des champs (`id`, `from`, `to`, `seats`, `sold`, `price`) et valeurs : confirmée contre `src/transfers.js:3-7`. ✓
-- Encapsulation : `seats` et `sold` absents de la projection `src/server.js:14-20`. ✓
-- `seatsLeft(t) = t.seats - t.sold` (`src/transfers.js:13-15`). ✓
-- Absence de contraintes : correctement labellée `HYPOTHÈSE` — aucun code de validation dans `src/transfers.js`. ✓
-- `sold` uniquement en déclaration initiale (`src/transfers.js:4-6`), jamais modifié. ✓
-- `id` : entiers séquentiels 1, 2, 3. ✓
-- Absence de dimension temporelle : confirmée. ✓
-- `price` sans unité monétaire : correctement labellé `HYPOTHÈSE` sur le XPF. ✓
-- Recommandation 3 (réinitialiser `sold` Bora Bora) : actionnable, pointant `src/transfers.js:5`. ✓
-- Zéro secret dans les constats. ✓
+- Structure du catalogue : 3 objets avec champs `id, from, to, seats, sold, price` — confirmé par lecture de `src/transfers.js:3-7`. Valeurs exactes :
+  - `{ id: 1, from: "Papeete", to: "Moorea", seats: 40, sold: 12, price: 3500 }` ✓
+  - `{ id: 2, from: "Papeete", to: "Bora Bora", seats: 60, sold: 60, price: 21000 }` ✓
+  - `{ id: 3, from: "Raiatea", to: "Tahaa", seats: 20, sold: 5, price: 1800 }` ✓
+- `listTransfers()` retourne `transfers` sans copie (`src/transfers.js:10: return transfers`) — confirmé.
+- `sold` non modifié au runtime — confirmé : aucun `sold =` ni `sold +=` dans les sources (revue complète de `src/server.js` et `src/transfers.js`).
+- `seatsLeft(transfer)` sans validation d'invariant (`src/transfers.js:13-15`) — confirmé : `return transfer.seats - transfer.sold` sans garde.
+- Qualification `HYPOTHÈSE` pour le fixture id 2 (test de saturation) — correct, aucune documentation ne le confirme explicitement.
+- `NaN` sérialisé en `null` en JSON si `sold` ou `seats` sont `undefined` — comportement JSON.stringify standard, exact.
+- Encapsulation : `seats` et `sold` absents de la projection HTTP (`src/server.js:14-20`) — confirmé.
+- Aucune dépendance externe (`package.json:7` liste zéro dépendance) — confirmé.
+- Référence à `RELECTURE_WORKFLOW_CALCUL_DISPONIBILITE.md` vérifiée : fichier présent dans `.onboarding/relectures/`.
+- Aucun secret.
 
 ## Recommandations de correction
 
-Aucune correction nécessaire. La preuve du grep non reproduit in extenso est un point de style ; le constat reste exact et vérifiable.
+Aucune.

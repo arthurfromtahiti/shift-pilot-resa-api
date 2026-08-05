@@ -1,457 +1,470 @@
 # CAHIER_RECETTE — shift-pilot-resa-api
 
-> **Confiance : high** — tous les chemins de test sont issus des workflows et du code source vérifiés.
+Plan de test — parcours à valider, cas de régression, critères d'acceptation.
 
-Le cahier de recette décrit les parcours à tester pour valider que le produit fonctionne comme prévu. Chaque test est dérivé d'un **workflow** documenté (WORKFLOW_GET_TRANSFERS, WORKFLOW_SUITE_TESTS).
+> Confiance : high
 
----
+## Préambule
 
-## Préalable : Environnement de test
+Le cahier dérive de deux workflows analysés :
+- `WORKFLOW_LISTE_TRANSFERTS` — l'unique endpoint public GET /transfers.
+- `WORKFLOW_CALCUL_DISPONIBILITE` — primitives de calcul de disponibilité.
 
-### Prérequis
-
-- **Node.js ≥ 18** — runner de tests natif `node:test` et modules natifs.
-- **Git** — pour cloner le dépôt.
-- **Port 3100 disponible** (ou redéfinir via `PORT=XXXX`).
-
-### Installation
-
-```bash
-git clone <repo-url>
-cd shift-pilot-resa-api
-npm install          # Aucune dépendance externe — crée le package-lock.json si absent
-```
-
-### Démarrage du serveur
-
-```bash
-npm start            # Démarre le serveur sur http://localhost:3100
-```
-
-ou
-
-```bash
-PORT=3001 npm start  # Démarre sur un port custom
-```
-
-### Validation de l'env
-
-```bash
-# Vérifier Node.js
-node --version       # ≥ 18.x
-
-# Tester le runner
-npm test             # Doit afficher : 3 tests, 0 failures
-```
+Tests attendus : unitaires sur les fonctions pures + intégration HTTP (actuellement absent).
 
 ---
 
-## Test 1 : Consultation du catalogue (parcours nominal)
+## Cas de test 1 : Consultation du catalogue de transferts (`GET /transfers`)
 
-**Objectif** : Valider que `GET /transfers` retourne la liste complète des trois transferts avec leurs données correctes.
+**Type** : intégration HTTP (API flow externe)
 
-**Criticité** : Haute — c'est l'unique fonctionnalité exposée.
+**Objectif** : valider que le client reçoit la liste complète des 3 transferts avec disponibilité calculée.
 
-### Cas 1.1 : Réponse structurée
+### Pré-condition
+- Serveur Node.js lancé sur le port par défaut (3100) ou via `PORT` env var.
+- Pas de modification du tableau `transfers` en mémoire depuis le démarrage (état initial).
 
-**Étapes** :
+### Étapes
 
-1. Démarrer le serveur : `npm start`
-2. Envoyer une requête HTTP :
-   ```bash
-   curl -s http://localhost:3100/transfers | jq .
-   ```
+1. **Préparer une requête HTTP**
+   - Verbe : `GET`
+   - URL : `http://localhost:3100/transfers`
+   - Pas de header `Authorization`, pas de body.
 
-**Attendus** :
+2. **Envoyer la requête**
+   - Utiliser un client HTTP : navigateur (fetch/XHR), `curl`, `node fetch`, Postman, ou un test automatisé.
 
-- **Statut HTTP** : `200 OK`
-- **Header** : `Content-Type: application/json`
-- **Corps** : tableau JSON de 3 objets
-- **Champs par objet** : `id`, `from`, `to`, `price`, `seatsLeft` (et uniquement ceux-ci)
-- **Champs absents** : `seats`, `sold` (masqués à dessein)
+3. **Recevoir la réponse**
+   - Code de statut attendu : **200 OK**.
+   - Header `Content-Type` attendu : **`application/json`**.
+   - Body : un array JSON de 3 objets.
 
-**Exemple de réponse réussie** :
+### Critères d'acceptation
+
+**Structure de réponse** : un tableau JSON contenant exactement 3 objets, chacun avec les champs suivants (pas d'ordre imposé) :
+- `id` (entier)
+- `from` (chaîne)
+- `to` (chaîne)
+- `price` (entier)
+- `seatsLeft` (entier)
+
+**Les champs `seats` et `sold` ne doivent jamais apparaître.**
+
+### Cas de données attendues
+
+Après un démarrage frais du serveur (ou réinitialisation du module), la réponse doit contenir :
+
 ```json
 [
-  { "id": 1, "from": "Papeete", "to": "Moorea", "price": 3500, "seatsLeft": 28 },
-  { "id": 2, "from": "Papeete", "to": "Bora Bora", "price": 21000, "seatsLeft": 0 },
-  { "id": 3, "from": "Raiatea", "to": "Tahaa", "price": 1800, "seatsLeft": 15 }
+  {
+    "id": 1,
+    "from": "Papeete",
+    "to": "Moorea",
+    "price": 3500,
+    "seatsLeft": 28
+  },
+  {
+    "id": 2,
+    "from": "Papeete",
+    "to": "Bora Bora",
+    "price": 21000,
+    "seatsLeft": 0
+  },
+  {
+    "id": 3,
+    "from": "Raiatea",
+    "to": "Tahaa",
+    "price": 1800,
+    "seatsLeft": 15
+  }
 ]
 ```
 
 **Validation** :
+- Transfert id 1 : 40 places, 12 vendues → `seatsLeft = 28`. ✓
+- Transfert id 2 : 60 places, 60 vendues → `seatsLeft = 0` (saturé). ✓
+- Transfert id 3 : 20 places, 5 vendues → `seatsLeft = 15`. ✓
 
-- [ ] 3 objets dans le tableau.
-- [ ] Chaque objet contient exactement 5 champs.
-- [ ] Pas de champ `seats` ni `sold`.
-- [ ] `seatsLeft` est un entier positif (ou zéro).
+### Résultat
 
-### Cas 1.2 : Valeurs correctes
+**Acceptation** : le serveur retourne un array valide de 3 transferts avec les valeurs de disponibilité correctes, sans exposer `seats` ni `sold`.
 
-**Étapes** : (suite du cas 1.1)
-
-**Attendus** :
-
-| Transfert | id | from | to | price | seatsLeft | Calcul |
-|-----------|----|----|-----|-------|-----------|--------|
-| 1 | 1 | Papeete | Moorea | 3500 | 28 | 40 - 12 |
-| 2 | 2 | Papeete | Bora Bora | 21000 | 0 | 60 - 60 |
-| 3 | 3 | Raiatea | Tahaa | 1800 | 15 | 20 - 5 |
-
-**Validation** :
-
-- [ ] Tous les `id` sont uniques et séquentiels (1, 2, 3).
-- [ ] Tous les `from` et `to` correspondent à des îles réelles (Papeete, Moorea, Bora Bora, Raiatea, Tahaa).
-- [ ] Tous les `price` sont des entiers positifs.
-- [ ] `seatsLeft` = `seats` − `sold` pour chaque transfert.
-  - Papeete→Moorea : 40 − 12 = 28 ✓
-  - Papeete→Bora Bora : 60 − 60 = 0 ✓
-  - Raiatea→Tahaa : 20 − 5 = 15 ✓
-
-### Cas 1.3 : Ordre de retour
-
-**Étapes** : (suite du cas 1.1)
-
-**Attendus** :
-- Les transferts sont retournés dans l'ordre du tableau source (`src/transfers.js:3-7`).
-- Ordre : Papeete→Moorea (ID 1), Papeete→Bora Bora (ID 2), Raiatea→Tahaa (ID 3).
-
-**Validation** :
-
-- [ ] L'ordre est respecté (pas de tri par prix, destination ou `seatsLeft`).
+**Rejet** : le serveur retourne un code d'erreur (5xx), un array vide, des champs manquants, ou des données incorrectes.
 
 ---
 
-## Test 2 : Erreurs HTTP et chemins inconnus
+## Cas de test 2 : Réponse 404 sur route invalide
 
-**Objectif** : Valider que les requêtes invalides retournent un statut 404 et un message d'erreur structuré.
+**Type** : intégration HTTP (negative case)
 
-**Criticité** : Moyenne — comportement défensif.
+**Objectif** : valider que le serveur rejette les requêtes qui ne correspondent pas à `GET /transfers`.
 
-### Cas 2.1 : Mauvais chemin
+### Cas 2a : Verbe HTTP non supporté sur `/transfers`
 
-**Étapes** :
+**Étape** : envoyer `POST /transfers` (ou `PUT`, `DELETE`, `PATCH`) vers le serveur.
 
-1. Serveur en cours d'exécution.
-2. Envoyer une requête à un chemin inexistant :
-   ```bash
-   curl -s -i http://localhost:3100/unknown
-   ```
+**Code attendu** : **404 Not found**
 
-**Attendus** :
+**Body attendu** : `{ "error": "Not found" }`
 
-- **Statut HTTP** : `404 Not Found`
-- **Header** : `Content-Type: application/json`
-- **Corps** : `{ "error": "Not found" }`
+**Content-Type** : `application/json`
 
-**Validation** :
+### Cas 2b : Route inexistante
 
-- [ ] Statut 404.
-- [ ] Corps JSON valide avec message `error`.
+**Étape** : envoyer `GET /` ou `GET /catalogue` ou `GET /transfers/1`.
 
-### Cas 2.2 : Mauvaise méthode HTTP
+**Code attendu** : **404 Not found**
 
-**Étapes** :
+**Body attendu** : `{ "error": "Not found" }`
 
-1. Serveur en cours d'exécution.
-2. Envoyer une requête POST (au lieu de GET) :
-   ```bash
-   curl -s -i -X POST http://localhost:3100/transfers
-   ```
+### Résultat
 
-**Attendus** :
+**Acceptation** : tout verbe non-GET ou toute route autre que `/transfers` retourne 404 + body vide ou erreur JSON.
 
-- **Statut HTTP** : `404 Not Found`
-- **Corps** : `{ "error": "Not found" }`
-
-**Validation** :
-
-- [ ] Statut 404 (pas 405 Method Not Allowed).
-- [ ] Corps identique au cas 2.1.
-
-### Cas 2.3 : Chemins typiquement attendus mais absents
-
-**Étapes** : Tester les routes qui pourraient être anticipées mais ne sont pas implémentées :
-
-1. `POST /transfers` (créer une réservation) :
-   ```bash
-   curl -s -i -X POST -H "Content-Type: application/json" \
-     -d '{"from":"Papeete","to":"Moorea"}' \
-     http://localhost:3100/transfers
-   ```
-   → Doit retourner 404.
-
-2. `GET /transfers/1` (consulter un transfert spécifique) :
-   ```bash
-   curl -s -i http://localhost:3100/transfers/1
-   ```
-   → Doit retourner 404.
-
-3. `GET /transfers?from=Papeete` (filtrer par origine) :
-   ```bash
-   curl -s -i http://localhost:3100/transfers?from=Papeete
-   ```
-   → Doit retourner l'intégralité du catalogue (query ignorés), statut 200.
-
-**Validation** :
-
-- [ ] POST /transfers → 404.
-- [ ] GET /transfers/:id → 404.
-- [ ] GET /transfers?... → 200 + catalogue complet (query ignorés).
-
-**Note** : Le dernier cas est important pour documenter que les filtres ne sont **pas** implémentés — le client reçoit toujours les 3 transferts.
+**Rejet** : le serveur accepte `POST /transfers` ou retourne un code différent (5xx, 405, etc.).
 
 ---
 
-## Test 3 : Logique métier — Calcul des places
+## Cas de test 3 : Calcul de disponibilité — fonction `seatsLeft()`
 
-**Objectif** : Valider que le calcul `seatsLeft = seats - sold` est exact et cohérent.
+**Type** : unitaire (fonction pure)
 
-**Criticité** : Haute — c'est une règle métier critique.
+**Objectif** : valider que `seatsLeft(transfer)` retourne `seats - sold` sans effet de bord.
 
-### Cas 3.1 : Calcul correct par transfert
+**Framework** : `node:test` + `node:assert/strict` (déjà utilisé dans `test/transfers.test.js`)
 
-**Étapes** : (suite du test 1)
+### Cas 3a : Cas nominal (places vendues < places totales)
 
-**Attendus** :
-
-Pour chaque transfert, vérifie que `seatsLeft` = `seats` − `sold`.
-
-| Transfert | Données source | Calcul attendu | Réponse API |
-|-----------|---|---|---|
-| 1 | seats:40, sold:12 | 40 − 12 = 28 | seatsLeft: 28 |
-| 2 | seats:60, sold:60 | 60 − 60 = 0 | seatsLeft: 0 |
-| 3 | seats:20, sold:5 | 20 − 5 = 15 | seatsLeft: 15 |
-
-**Validation** :
-
-- [ ] Papeete→Moorea : `seatsLeft === 28`
-- [ ] Papeete→Bora Bora : `seatsLeft === 0`
-- [ ] Raiatea→Tahaa : `seatsLeft === 15`
-
-### Cas 3.2 : Cohérence entre appels
-
-**Étapes** :
-
-1. Envoyer 3 requêtes consécutives à `GET /transfers`.
-2. Comparer les réponses.
-
-**Attendus** :
-
-- Les trois réponses sont **identiques** (pas de mutation du stock entre appels).
-- `seatsLeft` ne change pas.
-
-**Validation** :
-
-- [ ] Réponse 1 == Réponse 2 == Réponse 3.
-
-**Justification** : Les données sont statiques en mémoire, jamais modifiées en runtime (pas de route d'écriture).
-
-### Cas 3.3 : Signification de seatsLeft = 0
-
-**Étapes** :
-
-1. Récupérer la réponse de `GET /transfers`.
-2. Localiser le transfert avec `seatsLeft: 0` (Papeete→Bora Bora, ID 2).
-
-**Attendus** :
-
-- `seatsLeft: 0` signifie que le transfert est **complet** (aucune place libre).
-- Cette information est suffisante pour que le client web affiche un badge « complet » ou masque ce trajet des offres disponibles.
-
-**Validation** :
-
-- [ ] Bora Bora a `seatsLeft: 0`.
-- [ ] Les deux autres ont `seatsLeft > 0`.
-
-**Note pédagogique** : Bora Bora est complet **depuis le démarrage** (`sold: 60 = seats: 60`) — c'est un artefact de donnée volontaire pour la démonstration, pas une réservation effectuée. Le client doit l'accepter.
-
----
-
-## Test 4 : Suite de tests unitaires
-
-**Objectif** : Valider que tous les tests automatisés passent et qu'il n'y a pas de régression dans la logique métier.
-
-**Criticité** : Moyenne — tests logique pure seulement (pas d'intégration HTTP).
-
-### Cas 4.1 : Exécution complète
-
-**Étapes** :
-
-1. Terminal ouvert sur le dépôt.
-2. Exécuter : `npm test`
-
-**Attendus** :
-
-```
-# Exemple de sortie réussie (Node.js natif test runner)
-✓ seatsLeft calculation
-✓ isFull detection
-✓ listTransfers cardinality
+```javascript
+test("seatsLeft calcule correctement les places restantes", () => {
+  const transfer = { seats: 40, sold: 12 };
+  assert.strictEqual(seatsLeft(transfer), 28);
+});
 ```
 
-- **Statut sortie** : code `0` (succès).
-- **3 tests passent**.
+**Données** : 40 places, 12 vendues → 28 restantes.
+**Acceptation** : la fonction retourne `28`.
 
-**Validation** :
+### Cas 3b : Cas limite — pas de vente
 
-- [ ] `npm test` retourne code 0.
-- [ ] Pas de `FAIL` ni `Error` dans la sortie.
+```javascript
+test("seatsLeft retourne capacity si sold === 0", () => {
+  const transfer = { seats: 100, sold: 0 };
+  assert.strictEqual(seatsLeft(transfer), 100);
+});
+```
 
-### Cas 4.2 : Détail des tests
+**Données** : 100 places, 0 vendues → 100 restantes.
+**Acceptation** : la fonction retourne `100`.
 
-**Étapes** : (suite du cas 4.1)
+### Cas 3c : Cas limite — complet
 
-**Attendus** :
+```javascript
+test("seatsLeft retourne 0 si sold === seats", () => {
+  const transfer = { seats: 60, sold: 60 };
+  assert.strictEqual(seatsLeft(transfer), 0);
+});
+```
 
-**Test 1 — `seatsLeft`** :
-- Vérifie que `seatsLeft({ seats: 40, sold: 12 }) === 28` ✓
+**Données** : 60 places, 60 vendues → 0 restantes.
+**Acceptation** : la fonction retourne `0`.
 
-**Test 2 — `isFull`** :
-- Vérifie que `isFull({ seats: 60, sold: 60 }) === true` ✓
-- Vérifie que `isFull({ seats: 40, sold: 12 }) === false` ✓
+### Cas 3d : Cas de survente (comportement actuel — pas de garde)
 
-**Test 3 — `listTransfers` cardinalité** :
-- Vérifie que `listTransfers().length === 3` ✓
+```javascript
+test("seatsLeft retourne un nombre négatif si sold > seats (comportement actuel, non gardé)", () => {
+  const transfer = { seats: 40, sold: 50 };
+  assert.strictEqual(seatsLeft(transfer), -10);  // comportement observé, pas défini comme correct
+});
+```
 
-**Validation** :
+**Données** : 40 places, 50 vendues → -10 retourné (incohérent, mais pas d'erreur levée).
+**Réalité** : la fonction retourne `-10`. Pas de validation d'invariant.
+**Note** : ce cas n'est **pas un critère d'acceptation actuel** mais documenter le comportement pour la couverture future.
 
-- [ ] Test 1 passe (calcul de `seatsLeft` correct).
-- [ ] Test 2 passe (détection de complétude correcte).
-- [ ] Test 3 passe (catalogue retourne 3 éléments).
+### Résultat
 
-### Cas 4.3 : Couverture des tests
+**Acceptation** : `seatsLeft(transfer)` retourne toujours `transfer.seats - transfer.sold` pour toute paire d'entiers.
 
-**Étapes** : (analyse statique)
-
-**Observations** :
-
-- **Couverture logique métier** : Tests 1, 2, 3 couvrent les trois fonctions exportées (`seatsLeft`, `isFull`, `listTransfers`).
-- **Couverture HTTP** : **Aucun test** de la route `GET /transfers`, du routage, ou de la sérialisation JSON.
-
-**Validation** :
-
-- [ ] Les tests couvrent la logique métier pure (pas d'intégration).
-- [ ] Aucun test HTTP trouvé (à ajouter si évolution majeure).
-
-**Implication** : Un bug dans `src/server.js` (routage, projection de réponse, sérialisation) ne serait **pas** détecté par cette suite. Tests 1–2 portent sur des objets injectés (fixtures), pas sur le catalogue réel. Seul le test 3 vérifie que le catalogue a 3 éléments.
-
----
-
-## Test 5 : Performance et stabilité
-
-**Objectif** : Valider que le serveur est stable et répond rapidement sous une charge minimale.
-
-**Criticité** : Basse — pilote de démonstration, pas de charge critique attendue.
-
-### Cas 5.1 : Requêtes répétées
-
-**Étapes** :
-
-1. Serveur lancé.
-2. Exécuter 100 requêtes consécutives :
-   ```bash
-   for i in {1..100}; do curl -s http://localhost:3100/transfers > /dev/null; done; echo "Done"
-   ```
-3. Mesurer le temps total.
-
-**Attendus** :
-
-- Toutes les 100 requêtes retournent statut 200.
-- Le serveur ne s'arrête pas.
-- Le serveur ne plante pas (code de sortie 0 pour toutes les requêtes).
-
-**Validation** :
-
-- [ ] Pas d'erreur en cours d'exécution.
-- [ ] Pas de crash du serveur.
-- [ ] Aucune exception non gérée ne coupe la connexion.
-
-### Cas 5.2 : Port configuré
-
-**Étapes** :
-
-1. Démarrer le serveur sur un port custom :
-   ```bash
-   PORT=3001 npm start &
-   ```
-2. Vérifier que le serveur écoute sur ce port :
-   ```bash
-   curl -s http://localhost:3001/transfers > /dev/null && echo "OK"
-   ```
-3. Tuer le processus : `pkill -f "node.*server.js"`
-
-**Attendus** :
-
-- Le serveur démarre sur le port fourni via `PORT`.
-- Les requêtes retournent 200.
-
-**Validation** :
-
-- [ ] Port custom accepté.
-- [ ] Serveur fonctionnel sur ce port.
+**Rejet** : la fonction retourne une valeur différente, jette une exception, ou modifie l'objet `transfer` passé en paramètre.
 
 ---
 
-## Matrices de tests supplémentaires
+## Cas de test 4 : Détection de saturation — fonction `isFull()`
 
-### Matrice 1 : Combinaisons HTTP valides/invalides
+**Type** : unitaire (fonction pure)
 
-| Chemin | Méthode | Attendu | Test |
-|--------|---------|---------|------|
-| `/transfers` | GET | 200 + catalogue | 1.1 ✓ |
-| `/transfers` | POST | 404 | 2.2 |
-| `/transfers` | PUT | 404 | 2.2 |
-| `/transfers` | DELETE | 404 | 2.2 |
-| `/transfers/1` | GET | 404 | 2.3 |
-| `/unknown` | GET | 404 | 2.1 |
-| `/transfers?available=true` | GET | 200 + catalogue | 2.3 |
+**Objectif** : valider que `isFull(transfer)` retourne `true` ssi `seatsLeft === 0`.
 
-### Matrice 2 : Cohérence des données
+### Cas 4a : Transfert complet
 
-| Scénario | Vérifie | Test |
-|----------|---------|------|
-| Stock figé | `seatsLeft` identique entre appels | 3.2 |
-| Calcul correct | `seatsLeft = seats - sold` | 3.1, 4.2 |
-| Bora Bora complet | `seatsLeft === 0` pour ID 2 | 3.3, 4.2 |
-| Données masquées | Absence de `seats` et `sold` | 1.1 |
+```javascript
+test("isFull retourne true si seatsLeft === 0", () => {
+  const transfer = { seats: 60, sold: 60 };
+  assert.strictEqual(isFull(transfer), true);
+});
+```
+
+**Données** : saturé.
+**Acceptation** : retourne `true`.
+
+### Cas 4b : Transfert non complet
+
+```javascript
+test("isFull retourne false si seatsLeft > 0", () => {
+  const transfer = { seats: 40, sold: 12 };
+  assert.strictEqual(isFull(transfer), false);
+});
+```
+
+**Données** : 28 places restantes.
+**Acceptation** : retourne `false`.
+
+### Cas 4c : Presque complet (1 place)
+
+```javascript
+test("isFull retourne false si seatsLeft === 1", () => {
+  const transfer = { seats: 40, sold: 39 };
+  assert.strictEqual(isFull(transfer), false);
+});
+```
+
+**Données** : 1 place restante.
+**Acceptation** : retourne `false` (pas de notion de « seuil »).
+
+### Résultat
+
+**Acceptation** : `isFull(transfer)` retourne un booléen correct pour tous les cas.
+
+**Rejet** : la fonction retourne une valeur incorrecte ou jette une exception.
 
 ---
 
-## Blocages connus et limitations
+## Cas de test 5 : Accès au catalogue — fonction `listTransfers()`
 
-### Fonctionnalités absentes (intentionnelles)
+**Type** : unitaire + intégration
 
-| Fonctionnalité | Statut | Implication de test |
-|---|---|---|
-| Réservation (POST) | Absent | Ne pas tester une route qui n'existe pas |
-| Filtrage (`?from=X`) | Absent | Tester que les query strings sont ignorés (retour catalogue complet) |
-| `isFull` dans la réponse | Absent | Tester que le champ n'existe pas dans le JSON |
-| Persistance | Absent | Tester que les données se réinitialisent au redémarrage |
+**Objectif** : valider que `listTransfers()` retourne un array de 3 transferts avec les champs attendus.
 
-### Pré-requis pour prolonger la recette
+### Cas 5a : Longueur et structure
 
-Si une nouvelle fonctionnalité est ajoutée (ex. une deuxième route), ajouter des cas de test correspondants :
-- [ ] Nouveaux cas dans le test 2 (erreurs HTTP).
-- [ ] Nouveaux tests de logique métier (équivalents aux tests 3–4).
-- [ ] Mise à jour du test de performance (cas 5.1) si la logique devient plus lourde.
+```javascript
+test("listTransfers retourne exactement 3 transferts avec les champs requis", () => {
+  const transfers = listTransfers();
+  assert.strictEqual(transfers.length, 3);
+  
+  // Vérifier que chaque transfert a les champs attendus
+  transfers.forEach(t => {
+    assert(t.id !== undefined);
+    assert(t.from !== undefined);
+    assert(t.to !== undefined);
+    assert(t.seats !== undefined);
+    assert(t.sold !== undefined);
+    assert(t.price !== undefined);
+  });
+});
+```
+
+**Acceptation** : array de 3 objets, chacun avec `id, from, to, seats, sold, price`.
+
+### Cas 5b : Cohérence des valeurs
+
+```javascript
+test("listTransfers retourne les données attendues", () => {
+  const transfers = listTransfers();
+  
+  // Transfert 1
+  assert.strictEqual(transfers[0].id, 1);
+  assert.strictEqual(transfers[0].from, "Papeete");
+  assert.strictEqual(transfers[0].to, "Moorea");
+  assert.strictEqual(transfers[0].seats, 40);
+  assert.strictEqual(transfers[0].sold, 12);
+  assert.strictEqual(transfers[0].price, 3500);
+  
+  // Transfert 2 (complet)
+  assert.strictEqual(transfers[1].id, 2);
+  assert.strictEqual(transfers[1].seats, 60);
+  assert.strictEqual(transfers[1].sold, 60);
+  
+  // Transfert 3
+  assert.strictEqual(transfers[2].id, 3);
+  assert.strictEqual(transfers[2].from, "Raiatea");
+  assert.strictEqual(transfers[2].to, "Tahaa");
+  assert.strictEqual(transfers[2].seats, 20);
+  assert.strictEqual(transfers[2].sold, 5);
+  assert.strictEqual(transfers[2].price, 1800);
+});
+```
+
+**Acceptation** : toutes les valeurs correspondent aux données en mémoire.
+
+### Résultat
+
+**Acceptation** : `listTransfers()` retourne l'array complet avec les bonnes données.
+
+**Rejet** : données manquantes, incorrectes, ou array vide.
 
 ---
 
-## Checklist finale de recette
+## Cas de test 6 : Absence de régression — aucune mutation d'état
 
-**Avant de valider le produit** :
+**Type** : intégration / robustesse
 
-- [ ] Test 1 : `GET /transfers` retourne 3 objets avec les bons champs.
-- [ ] Test 1 : `seatsLeft` est correct pour chaque transfert.
-- [ ] Test 2 : Chemins inconnus retournent 404.
-- [ ] Test 2 : Mauvaises méthodes retournent 404.
-- [ ] Test 2 : Query strings n'affectent pas le résultat (catalogue complet retourné).
-- [ ] Test 3 : Logique métier stable (calcul cohérent).
-- [ ] Test 4 : `npm test` passe (3/3 tests).
-- [ ] Test 5 : Serveur stable sous 100 requêtes.
-- [ ] Test 5 : Port configurable via `PORT`.
-- [ ] Documentation : README précise que la réservation (écriture) est absente.
+**Objectif** : valider que la projection `GET /transfers` ne modifie pas l'état interne.
 
-**Signature** : Tous les points cochés = **recette passée** pour ce dépôt.
+### Cas 6a : Appel multiple avec résultats identiques
 
+```javascript
+test("GET /transfers retourne les mêmes données à chaque appel (pas de mutation d'état)", async () => {
+  // Envoyer deux requêtes GET /transfers
+  const response1 = await fetch('http://localhost:3100/transfers');
+  const data1 = await response1.json();
+  
+  const response2 = await fetch('http://localhost:3100/transfers');
+  const data2 = await response2.json();
+  
+  // Les données doivent être identiques
+  assert.deepStrictEqual(data1, data2);
+});
+```
+
+**Acceptation** : deux appels successifs retournent exactement le même JSON.
+
+**Rejet** : les données divergent entre les deux appels (mutation d'état non contrôlée).
+
+### Résultat
+
+**Acceptation** : l'état en mémoire n'est pas modifié par les appels `GET /transfers`.
+
+**Rejet** : le service modifie silencieusement `sold` ou d'autres champs.
+
+---
+
+## Cas de test 7 : Robustesse — gestion des erreurs
+
+**Type** : intégration / sécurité
+
+**Objectif** : valider que le serveur ne crashe pas sur inputs invalides.
+
+### Cas 7a : URL malformée (RISQUE ACTIF — non couvert actuellement)
+
+**Étape** : envoyer une requête HTTP/0.9 ou une URL avec caractères non UTF-8 valides (ex. `GET %FF%FE HTTP/1.1`).
+
+**Résultat attendu** : le serveur **doit** retourner un 400 Bad Request au lieu de crasher.
+
+**Réalité actuelle** : le serveur crashe (exception `TypeError` non attrapée dans `server.js:11`).
+
+**Critère** : ce test échoue ; on attend une correction (voir `SECURITY_ROBUSTNESS_AUDIT.md`).
+
+### Cas 7b : Header `Host` absent (HTTP/1.0)
+
+**Étape** : envoyer une requête sans header `Host`.
+
+**Résultat attendu** : le serveur doit gérer `req.headers.host === undefined` sans crasher.
+
+**Critère** : le serveur retourne 200 ou 400, pas de crash.
+
+### Résultat
+
+**Acceptation** : le serveur gère gracieusement les inputs malformés.
+
+**Rejet** : le serveur crashe ou retourne 5xx sur une requête malformée.
+
+---
+
+## Cas de test 8 : Intégration frontend — CORS
+
+**Type** : intégration / cross-origin
+
+**Objectif** : valider que le frontend `shift-pilot-resa-web` peut consommer l'API depuis un navigateur sur une origine différente.
+
+**Pré-condition** : les deux services tournent sur des ports différents (ex. API sur 3100, frontend sur 3000).
+
+### Cas 8a : Requête cross-origin depuis le navigateur
+
+**Étape** (JavaScript côté frontend) :
+```javascript
+fetch('http://localhost:3100/transfers')
+  .then(r => r.json())
+  .then(data => console.log(data))
+  .catch(e => console.error('CORS failed:', e));
+```
+
+**Résultat attendu** : le navigateur **doit** recevoir un header `Access-Control-Allow-Origin` et ne pas lever une CORS error.
+
+**Réalité actuelle** : CORS bloqué (pas de header). Le navigateur lève `Origin http://localhost:3000 is not allowed`.
+
+**Critère** : ce test échoue ; on attend une correction (voir `SECURITY_ROBUSTNESS_AUDIT.md`).
+
+### Résultat
+
+**Acceptation** : le frontend peut appeler l'API depuis le navigateur sans CORS error.
+
+**Rejet** : requête bloquée par le navigateur avec CORS error.
+
+---
+
+## Matrice de couverture actuelle
+
+| Cas | Type | Implémenté | Couvert | Statut |
+|-----|------|-----------|---------|--------|
+| 1. GET /transfers | HTTP | ✓ | ✗ (pas de test HTTP) | À tester |
+| 2. 404 routes invalides | HTTP | ✓ | ✗ | À tester |
+| 3. seatsLeft() | Unitaire | ✓ | ~ (1 cas sur 4) | Partiellement couvert |
+| 4. isFull() | Unitaire | ✓ | ✓ (2 cas suffisants) | Couvert |
+| 5. listTransfers() | Unitaire | ✓ | ~ (longueur seulement) | Partiellement couvert |
+| 6. Pas de mutation | Intégration | ✓ (conception) | ✗ | À tester |
+| 7. Robustesse erreurs | Robustesse | ~ (incomplet) | ✗ | Défaillant |
+| 8. CORS frontend | Intégration | ✗ | ✗ | Non implémenté |
+
+---
+
+## Priorité de test
+
+### Immédiat (avant production)
+1. ✓ Tests HTTP `GET /transfers` (cas nominal + structure)
+2. ✓ Tests HTTP 404 (routes invalides)
+3. ✓ Try/catch URL parsing (risque crash)
+4. ✓ Headers CORS (frontend bloqué)
+
+### Court terme (avant ajout de réservation)
+5. Tests de cas limites `seatsLeft()` (survente, 0 vente)
+6. Test d'intégration pas de mutation d'état
+7. Validation des invariants (sold ≤ seats)
+
+### Moyen terme (évolution)
+8. Tests HTTP POST/PUT/PATCH (réservation, quand implémenté)
+9. Tests base de données (si migration)
+
+---
+
+## Commandement de test
+
+### Lancer les tests existants
+```bash
+npm test
+# Exécute test/transfers.test.js avec node:test
+# Résultat attendu : 3 tests passent
+```
+
+### Lancer le serveur manuellement
+```bash
+node src/server.js
+# Écoute sur 3100 (par défaut)
+# Test manuel : curl http://localhost:3100/transfers
+```
+
+### Lancer avec port personnalisé
+```bash
+PORT=3000 node src/server.js
+```
+
+---
+
+## Confiance et vérification
+
+**Workflows couverts** : 2 (LISTE_TRANSFERTS, CALCUL_DISPONIBILITE)
+**Cas testés actuellement** : 3 (unitaires, fonctions pures)
+**Gap critique** : zéro test HTTP du serveur + deux risques actifs (crash URL, CORS).
+
+**Recommandation** : écrire des tests HTTP intégrés (supertest, node-fetch) avant de considérer le service production-ready. Voir `TESTING_AUDIT.md` pour les détails.

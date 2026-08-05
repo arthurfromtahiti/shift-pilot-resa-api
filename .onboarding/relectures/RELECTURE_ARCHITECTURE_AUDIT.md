@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Audit rigoureux et honnête sur un codebase de 53 lignes. Tous les constats sont étayés par des références `fichier:ligne` précises, la frontière `VÉRIFIÉ_CODE` / `HYPOTHÈSE` est respectée, les risques sont conditionnels et correctement qualifiés. Aucun défaut bloquant.
+**Bon** — L'audit architectural est précis et proportionné à l'échelle du service (2 fichiers source, ~51 lignes). Les constats sont vérifiés à la ligne, les dettes sont correctement qualifiées comme latentes (non bloquantes aujourd'hui), et les forces sont réelles.
 
 ## Problèmes bloquants
 
@@ -10,20 +10,21 @@ Aucun.
 
 ## Problèmes mineurs
 
-- **Terminologie approximative « 53 lignes de code métier »** (intro) : la formulation « code métier » inclut lignes vides et `module.exports`, qui ne sont pas du code métier au sens strict. Le terme « code effectif » utilisé dans CODE_HOTSPOTS_AUDIT est plus précis — les deux désignent le même total de lignes (53) mais la terminologie diverge entre les deux audits. Mineure ; la quantification reste juste.
+Aucun.
 
 ## Points vérifiés et corrects
 
-- `src/server.js:3` — import de `{ listTransfers, seatsLeft }` uniquement : confirmé dans le fichier source. ✓
-- `src/server.js:10-23` — 14 lignes de callback (ligne 24 `});` est bien la fermeture de `http.createServer`, hors corps). ✓
-- `src/transfers.js:9-11` — `listTransfers()` retourne `transfers` sans copie. ✓
-- `src/server.js:27` — `if (require.main === module)` : vérifié. ✓
-- `src/server.js:26` — `process.env.PORT || 3100` : vérifié. ✓
-- `module.exports = server` à `src/server.js:30` : vérifié. ✓
-- Absence de `.github/`, `Dockerfile`, `Procfile`, `ecosystem.config.js` : confirmée par ls root. ✓
-- Dettes techniques et recommandations : actionnables, pointant des fichiers et lignes réels. ✓
-- Zéro secret dans les constats. ✓
+- `listTransfers()` retourne `transfers` sans copie (`src/transfers.js:9-11` : `return transfers`) — confirmé.
+- Routage inline : un seul `if` sur `url.pathname === '/transfers' && req.method === 'GET'` (`src/server.js:13`) — confirmé.
+- Guard `require.main === module` (`src/server.js:27`) — confirmé.
+- `module.exports = server` à `src/server.js:30` — confirmé (dernière ligne du fichier de 30 lignes).
+- Absence de script `start` dans `package.json` — confirmé : seul `"test": "node --test test/"` est déclaré.
+- Encapsulation correcte : `src/server.js` n'accède pas à `seats` ni `sold` directement (projection `id, from, to, price, seatsLeft` aux lignes 14-20) — confirmé.
+- Absence d'injection de dépendance sur `transfers` — confirmé : `const transfers = [...]` est une constante module-level dans `src/transfers.js:3`.
+- Renvoi vers `SECURITY_ROBUSTNESS_AUDIT.md` pour le risque URL malformée — correct, pas de double-documentation.
+- Gravité des dettes correctement calibrée : latentes pour le pilote, critiques à l'extension — nuance bien rendue.
+- Aucun secret.
 
 ## Recommandations de correction
 
-Aucune correction nécessaire. La terminologie « code métier » vs « code effectif » est une coquille cosmétique sans impact sur la compréhension ; ne mérite pas un cycle de correction.
+Aucune.

@@ -4,65 +4,56 @@
 
 ## Compréhension globale
 
-`shift-pilot-resa-api` est une API HTTP Node.js écrite sans framework, organisée en deux fichiers source totaling 53 lignes de code métier. La séparation entre couche HTTP (`src/server.js`) et couche données/calcul (`src/transfers.js`) est nette et intentionnelle. À ce niveau de taille, l'architecture est saine et sans surprises ; les risques identifiés sont des signaux d'alerte pour la croissance, non des défauts actuels.
+`shift-pilot-resa-api` est un service Node.js minimaliste de 2 fichiers source (~51 lignes au total) sans framework ni dépendance externe. L'unique frontière architecturale est la séparation entre transport HTTP (`src/server.js`) et logique de domaine/données (`src/transfers.js`). Il n'existe pas de couche de persistance, pas de middleware, pas d'abstraction de routage.
 
 ## Résumé exécutif
 
-Le projet adopte une architecture à deux couches : `src/transfers.js` porte les données en mémoire et les fonctions de calcul métier (`listTransfers`, `seatsLeft`, `isFull`) ; `src/server.js` porte la couche HTTP (routage, sérialisation JSON, écoute du port). Aucune dépendance externe : uniquement `node:http` et `node:url` (modules natifs).
-
-La couche HTTP est un seul grand callback `http.createServer` qui route, appelle la logique métier, projette la réponse et sérialise en JSON — toutes ces responsabilités sont inline sur 15 lignes (`src/server.js:10-23`). Pour une route unique, c'est acceptable ; dès la deuxième route, ce callback devient le point d'accumulation naturel de toute la logique applicative.
-
-Deux bonnes pratiques de conception sont présentes : le guard `require.main === module` (`src/server.js:27`) empêche le démarrage du serveur lors des imports en test ; `module.exports = server` (`src/server.js:30`) rend le serveur testable sans démarrage. Ces choix délibérés montrent que l'auteur a anticipé un usage en test.
-
-La donnée (`transfers`) est un tableau module-level déclaré en `const` (`src/transfers.js:3-7`). `listTransfers()` retourne la référence directe du tableau (`src/transfers.js:9-11`), ce qui l'expose à une mutation externe sans avertissement.
-
-L'architecture est adaptée au périmètre pilote. Son principal risque est structural : une seule route aujourd'hui, mais la forme actuelle du callback serveur ne guidera pas naturellement vers une organisation propre quand le périmètre s'étendra.
+L'architecture est volontairement rudimentaire, cohérente avec la mention explicite de « pilote de démonstration » (`src/transfers.js:1`). La séparation transport/domaine est propre et suffisante pour l'échelle actuelle (1 route, 3 fonctions). Deux risques structurels méritent attention avant toute évolution : `listTransfers()` expose une référence mutable au tableau interne, et le routage ad hoc (`if/else` direct dans le handler) ne scalera pas au-delà de 2-3 routes sans refactoring. L'absence de script de démarrage dans `package.json` est une dette documentaire légère. Aucun problème bloquant pour l'usage pilote actuel ; les dettes deviennent critiques dès l'ajout d'un endpoint de réservation.
 
 ## Constats détaillés
 
-**Séparation HTTP / métier — VÉRIFIÉ_CODE.** `src/server.js:3` importe uniquement `{ listTransfers, seatsLeft }` depuis `./transfers` ; la logique de calcul ne remonte jamais dans le fichier serveur autrement que par appel de fonction. La frontière est propre. En miroir, `src/transfers.js` ne contient aucune référence à `http`, `res`, `req` ou au format de réponse API — la logique métier est agnostique du protocole.
+**Séparation des responsabilités** — `VÉRIFIÉ_CODE` : `src/server.js:3` importe uniquement `{ listTransfers, seatsLeft }` de `./transfers`. Le serveur ne connaît pas la structure interne du tableau `transfers` ; il construit sa projection (`id, from, to, price, seatsLeft`) sans accéder aux champs `seats` ou `sold` directement (`src/server.js:14-20`). Cette encapsulation est correcte et explicitement respectée.
 
-**Projection inline — VÉRIFIÉ_CODE.** La transformation du modèle interne vers le modèle de réponse API (exclusion de `seats` et `sold`, inclusion de `seatsLeft`) est réalisée directement dans le handler, sur `src/server.js:14-20`, sans fonction nommée ni couche dédiée. Pour une projection, c'est du code lisible. Pour deux ou trois projections, ce pattern conduit à de la logique de sérialisation éparpillée dans les handlers.
+**Référence mutable exposée** — `VÉRIFIÉ_CODE` : `listTransfers()` retourne `transfers` sans copie (`src/transfers.js:9-11: return transfers`). `transfers` est la constante module-level déclarée à `src/transfers.js:3`. Tout appelant disposant du résultat peut écrire `listTransfers()[0].sold = 999` et muter l'état global du module. L'appelant actuel (`src/server.js:14`) utilise `.map()` qui lit sans muter, mais le contrat n'est pas garanti par le code lui-même.
 
-**Routage ad hoc — VÉRIFIÉ_CODE.** Le routage est un `if` unique sur `url.pathname === "/transfers" && req.method === "GET"` (`src/server.js:13`), suivi du handler par défaut `404` (`src/server.js:23`). Sans abstraction de routeur, ajouter une seconde route revient à chaîner des `if/else if` dans le même callback. Ce pattern plafonne rapidement.
+**Routage inline** — `VÉRIFIÉ_CODE` : la logique de routage est un `if` unique sur `url.pathname` et `req.method` (`src/server.js:13`), suivi d'un `sendJson(res, 404, ...)` catch-all (`src/server.js:23`). Pour une route, c'est lisible. Pour 4-5 routes (catalogue, réservation, annulation, statut), ce pattern devient illisible et source d'erreurs.
 
-**Tableau mutable exposé — VÉRIFIÉ_CODE.** `listTransfers()` retourne `transfers` sans copie (`src/transfers.js:9-11`). Un appelant ayant la référence pourrait pousser ou modifier des éléments ; la mutation serait persistante pour la durée de vie du processus. Pour un projet read-only sur des données statiques, c'est sans risque actuel — mais c'est une surface de bug latente si une route d'écriture est ajoutée sans revenir sur cette fonction.
+**Guard `require.main === module`** — `VÉRIFIÉ_CODE` (`src/server.js:27`) : ce guard isole l'écoute du port de l'import du module, permettant aux tests d'importer `server` sans démarrer de listener. C'est une pratique Node.js standard, correctement appliquée.
 
-**Guard module.main — VÉRIFIÉ_CODE.** `if (require.main === module)` (`src/server.js:27`) permet à `src/server.js` d'être importé par un test sans déclencher `server.listen`. Pattern correct et intentionnel.
+**Absence de script de démarrage** — `VÉRIFIÉ_CODE` : `package.json:6` définit uniquement `"test": "node --test test/"`. Démarrer le serveur requiert `node src/server.js` ; le port par défaut est 3100 (`src/server.js:26`). Ce n'est pas documenté dans `package.json`, seulement implicitement dans le code.
 
-**Absence de CI, de Dockerfile, de gestionnaire de processus — VÉRIFIÉ_CODE (par absence après recherche dans l'ensemble du dépôt).** Aucun `.github/`, aucun `Dockerfile`, aucun `Procfile`, aucun `ecosystem.config.js`, aucun script de démarrage de prod. Cohérent avec un pilote de démonstration, mais à adresser avant tout déploiement.
+**Absence d'injection de dépendance sur la source de données** — `VÉRIFIÉ_CODE` : le tableau `transfers` est une constante module-level (`src/transfers.js:3`). Pour substituer la source (base de données, fichier, API externe), il faudra modifier `transfers.js` lui-même — il n'existe pas de mécanisme d'injection.
 
 ## Forces
 
-- **Séparation HTTP/métier nette** : `src/server.js` ne contient aucune règle métier, `src/transfers.js` aucun code HTTP. (`src/server.js:3`, `src/transfers.js:1-21`)
-- **Zéro dépendance externe** : `package.json` ne déclare aucune `dependency` ni `devDependency`. Aucune surface d'attaque supply-chain, aucune maintenance de librairies tierces.
-- **Guard `require.main === module`** : testabilité du serveur sans effet de bord de démarrage. (`src/server.js:27`)
-- **Port configurable** : `process.env.PORT || 3100` (`src/server.js:26`) permet un déploiement sans modifier le code.
+- Séparation transport/domaine claire : `src/server.js` ne connaît pas la structure interne des objets `transfer` (`src/server.js:14-20`).
+- Zéro dépendance externe : surface d'attaque supply-chain nulle, pas de `node_modules` à auditer (`package.json:1-7`).
+- Guard `require.main === module` : architecture testable par construction (`src/server.js:27`).
+- `sendJson` centralisé : la sérialisation JSON et le `Content-Type` sont gérés en un seul endroit (`src/server.js:5-8`).
 
 ## Dettes techniques
 
-- **Projection non nommée** : la transformation modèle interne → réponse API est anonyme et inline (`src/server.js:14-20`). Pas une dette bloquante à ce stade, mais un signal de refactoring à anticiper.
-- **Routeur implicite** : le routage par `if/else if` sur pathname/méthode dans le callback `createServer` (`src/server.js:10-23`) ne passe pas à l'échelle au-delà de deux ou trois routes.
-- **`listTransfers()` retourne la référence mutable** (`src/transfers.js:9-11`) : pattern fragile si des routes d'écriture sont ajoutées.
+- **Référence mutable** : `listTransfers()` expose le tableau interne sans copie défensive (`src/transfers.js:10`). Toute évolution qui modifie `sold` au runtime devra gérer ce risque explicitement.
+- **Routage ad hoc** : le `if/else` inline dans le handler (`src/server.js:13-23`) ne scalera pas au-delà de 2-3 routes.
+- **Pas de script `start`** dans `package.json` — dette documentaire et opérationnelle légère.
 
 ## Zones critiques
 
-- **`src/server.js:10-23` — le callback unique.** C'est ici que tout se passe : réception, parsing URL, routage, appel métier, projection, sérialisation. Un senior ouvrirait ce fichier en premier dès qu'il y a une regression sur la route ou un ajout de route — sa croissance est à surveiller.
+- `src/server.js:11` — parsing URL sans `try/catch` (voir `SECURITY_ROBUSTNESS_AUDIT.md`) : si le routage est étendu, tout appel à `url.pathname` repose sur ce parsing potentiellement defaillant.
+- `src/transfers.js:9-11` — `listTransfers()` retourne la référence brute : point d'entrée de toute mutation accidentelle de l'état global.
 
 ## Risques
 
-- **Explosion du callback serveur à la prochaine route** : la forme actuelle (un `if` suivi d'un `sendJson` par défaut) impose d'ajouter les routes inline dans le même callback. Impact : lisibilité et maintenabilité dégradées dès la deuxième route. Preuve : `src/server.js:13-23`.
-- **Mutation silencieuse du catalogue** : si une route d'écriture appelle `listTransfers()` et modifie l'array retourné, tous les appels suivants à `GET /transfers` retourneront l'état altéré jusqu'au redémarrage. Preuve : `src/transfers.js:9-11`.
+- **Crash sur URL malformée** : le handler HTTP n'attrape pas les exceptions de `new URL(...)` (`src/server.js:11`). Une requête malformée peut faire crasher le process (voir `SECURITY_ROBUSTNESS_AUDIT.md`). Ce risque est architectural : il n'existe pas de couche de récupération d'erreur.
+- **Couplage fort données/logique** : `transfers.js` est à la fois le store de données et le module de logique métier. Toute modification des règles de disponibilité ou de la source de données touche le même fichier.
 
 ## Recommandations priorisées
 
-1. **Introduire une couche de routage avant la deuxième route** — même minimale (`Map<string, Function>` ou switch) — pour éviter l'accumulation de logique dans le callback createServer. — `src/server.js:10-23`
-2. **Nommer la projection de réponse** — extraire le `.map()` en fonction `formatTransfer(t)` dans `src/transfers.js` ou un fichier dédié — pour rendre la sérialisation testable indépendamment. — `src/server.js:14-20`
-3. **Protéger le catalogue contre la mutation** — retourner `[...transfers]` ou `transfers.map(t => ({...t}))` dans `listTransfers()` avant d'ajouter toute route d'écriture. — `src/transfers.js:9-11`
-4. **Ajouter infrastructure de déploiement** (Dockerfile ou équivalent, `.gitignore`, CI) avant tout déploiement hors pilote.
+1. **Ajouter un `try/catch` autour du parsing URL** — risque crash actif — `src/server.js:11`
+2. **Retourner une copie dans `listTransfers()`** — prévenir la mutation accidentelle — `src/transfers.js:10` (`return [...transfers]` ou `return transfers.slice()`)
+3. **Ajouter un script `start`** dans `package.json` — dette documentaire/opérationnelle légère
 
 ## Questions ouvertes
 
-- Quelle est la stratégie d'évolution prévue ? Un framework Express/Fastify sera-t-il introduit, ou restera-t-on sur Node natif ?
-- Le port `3100` est-il un standard dans l'infrastructure de `shift-pilot-resa-web` (reverse proxy, compose) ? Aucune configuration infra trouvée dans ce dépôt.
-- Y a-t-il un environnement de déploiement cible (conteneur, PaaS, VM) ? Le README ne le mentionne pas.
+- L'architecture sera-t-elle renforcée (framework, router, ORM) avant de passer en production, ou le pilote sera-t-il remplacé par une implémentation de zéro ?
+- La source de données restera-t-elle en mémoire ou sera-t-elle remplacée par une base — ce choix détermine entièrement l'ampleur du refactoring nécessaire.

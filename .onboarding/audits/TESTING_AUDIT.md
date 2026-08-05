@@ -4,75 +4,64 @@
 
 ## Compréhension globale
 
-La suite de tests de `shift-pilot-resa-api` est minimale mais honnête : trois tests unitaires couvrant les trois fonctions pures de `src/transfers.js`, écrits avec le runner natif `node:test`, sans aucune dépendance externe. La couverture de la couche HTTP (routage, sérialisation, handler 404, projection) est entièrement absente. Le serveur est pourtant exporté et importable, ce qui rend les tests d'intégration HTTP réalisables sans infrastructure supplémentaire.
+La suite de tests est un fichier unique (`test/transfers.test.js`, 16 lignes) utilisant le runner natif Node.js (`node:test`, `node:assert/strict`). Elle contient 3 tests unitaires ciblant les 3 fonctions exportées de `src/transfers.js`. Aucun test HTTP n'existe. La surface testée est entièrement limitée aux fonctions pures de calcul ; l'unique point d'entrée du service (`GET /transfers`) est intégralement non testé.
 
 ## Résumé exécutif
 
-Trois tests, tous dans `test/transfers.test.js`, tous sur la logique pure de `src/transfers.js` : `seatsLeft` (calcul des places), `isFull` (détection de transfert complet), `listTransfers` (cardinalité du catalogue). Exécutables via `npm test` → `node --test test/` (`package.json`). Aucune dépendance npm : runner et assertions sont natifs (`node:test`, `node:assert/strict`).
-
-Ce qui n'est pas testé : `sendJson` (`src/server.js:5-8`), le routage HTTP (`src/server.js:13`), la projection `.map()` (`src/server.js:14-20`), le handler 404 (`src/server.js:23`), le démarrage sur port (`src/server.js:26-29`). La route `GET /transfers` — l'unique fonctionnalité livrée — n'a pas de test de bout en bout.
-
-Le test de cardinalité (`listTransfers().length === 3`, `test/transfers.test.js:14-16`) est couplé à la donnée de départ, pas au comportement de la fonction : il cassera dès qu'un quatrième transfert sera ajouté dans `src/transfers.js`.
-
-`isFull` est testée (`test/transfers.test.js:9-12`) bien qu'elle ne soit pas importée dans `src/server.js` (`src/server.js:3`) et donc jamais appelée en production. Les tests couvrent une surface légèrement plus large que le code en prod.
+La couverture observable est volontairement minimale, cohérente avec la nature pilote du projet. Les 3 tests couvrent les cas heureux des fonctions pures (`seatsLeft`, `isFull`, `listTransfers`) et sont corrects. Le gap central est l'absence complète de tests HTTP : le comportement du serveur (codes de statut, format JSON, headers, gestion du 404) n'est validé par aucun test automatisé. Le guard `require.main === module` (`src/server.js:27`) a été explicitement posé pour permettre ce type de test, mais n'a jamais été utilisé. L'arbre de cas non testés comprend également les valeurs limites des fonctions de calcul et le comportement sur données invalides.
 
 ## Constats détaillés
 
-**Tests existants — VÉRIFIÉ_CODE.** `test/transfers.test.js` déclare trois tests :
+**Tests existants** — `VÉRIFIÉ_CODE` : `test/transfers.test.js` contient 3 tests :
 
-| # | Nom | Fonction testée | Assertion | Statut |
-|---|---|---|---|---|
-| 1 | `seatsLeft calcule les places restantes` | `seatsLeft({ seats: 40, sold: 12 })` | `=== 28` | valide comportement |
-| 2 | `isFull detecte un transfert complet` | `isFull({ seats: 60, sold: 60 })` / `isFull({ seats: 40, sold: 12 })` | `true` / `false` | valide les deux branches |
-| 3 | `listTransfers retourne les 3 transferts` | `listTransfers().length` | `=== 3` | valide la cardinalité, pas le comportement |
+- `test("seatsLeft calcule les places restantes", ...)` (lignes 5-7) : un seul cas positif, `{ seats: 40, sold: 12 } → 28`. Correct.
+- `test("isFull detecte un transfert complet", ...)` (lignes 9-12) : deux cas — plein (`{ seats: 60, sold: 60 } → true`) et non plein (`{ seats: 40, sold: 12 } → false`). Correct.
+- `test("listTransfers retourne les 3 transferts", ...)` (lignes 14-16) : vérifie `listTransfers().length === 3`. Correct sur le compte, mais ne valide ni les champs, ni les valeurs, ni l'ordre.
 
-(`test/transfers.test.js:5-16`)
+Les 3 tests passent sur des objets littéraux construits ad hoc — ils ne dépendent pas du tableau `transfers` en mémoire pour les calculs (sauf `listTransfers` qui l'utilise directement).
 
-**Test 1 — VÉRIFIÉ_CODE.** L'assertion `seatsLeft({ seats: 40, sold: 12 }) === 28` vérifie le calcul `seats - sold` avec des fixtures isolées, indépendantes du tableau `transfers` en mémoire. C'est un test comportemental correct.
+**Runner et configuration** — `VÉRIFIÉ_CODE` : `package.json:6` définit `"test": "node --test test/"`. Node.js ≥18 requis (`package.json:5: "node": ">=18"`). Aucune dépendance externe de test (Jest, Mocha, etc.). Le runner natif `node:test` est approprié pour cette échelle.
 
-**Test 2 — VÉRIFIÉ_CODE.** L'assertion couvre les deux branches de `isFull` : complet (`sold === seats`) et non complet (`sold < seats`). C'est une couverture complète de la fonction. Rappel : `isFull` n'est pas utilisée par la route HTTP (`src/server.js:3`), mais son export et sa présence dans les tests signalent qu'elle est destinée à un usage futur.
+**Zéro test HTTP** — `VÉRIFIÉ_CODE` : `test/transfers.test.js:1-3` importe uniquement depuis `../src/transfers` — jamais `../src/server`. Le handler HTTP (`src/server.js:10-24`), la logique de routage (`src/server.js:13`), la projection JSON (`src/server.js:14-20`), le code 404 (`src/server.js:23`) et la fonction `sendJson` (`src/server.js:5-8`) sont non testés. Le guard `require.main === module` (`src/server.js:27`) permettrait d'importer le serveur et de lui envoyer des requêtes via `http.request` ou un supertest-like — cette capacité est inexploitée.
 
-**Test 3 — VÉRIFIÉ_CODE.** `listTransfers().length === 3` vérifie que le catalogue contient exactement trois transferts. Ce test est couplé à la donnée (`src/transfers.js:3-7`) et non au comportement de `listTransfers()`. Si un quatrième transfert est ajouté, ce test échoue non parce que la fonction est cassée, mais parce que le test vérifie une donnée. L'intention correcte serait `assert.ok(Array.isArray(listTransfers()))` ou vérifier qu'au moins un transfert est retourné avec les bons champs.
+**Cas limites non testés** — `VÉRIFIÉ_CODE` sur les fonctions de calcul :
 
-**Couverture de `src/server.js` — VÉRIFIÉ_CODE (absence).** Ni `sendJson`, ni le handler `http.createServer`, ni le routage, ni la projection `.map()`, ni le handler 404 ne sont couverts. Aucun fichier de test n'importe `src/server.js`. Le serveur est pourtant exporté via `module.exports = server` (`src/server.js:30`) — cette exportation a été posée pour permettre les tests d'intégration, mais aucun test ne l'utilise.
+- `seatsLeft` : seul le cas `sold < seats` est couvert. Manquent : `sold === 0` (résultat = `seats`), `sold === seats` (résultat = 0, frontière), `sold > seats` (résultat négatif — comportement silencieusement incohérent).
+- `isFull` : les deux cas booléens sont couverts, mais la frontière `sold === seats` est atteinte via `{ seats: 60, sold: 60 }` — c'est suffisant pour cette fonction.
+- `listTransfers` : seule la longueur est vérifiée. Un refactoring qui change les noms de champs passerait ce test sans avertissement.
 
-**Infrastructure de tests — VÉRIFIÉ_CODE.** `node:test` (Node.js ≥ 18) et `node:assert/strict` sont des modules natifs — aucune dépendance npm requise. `package.json:5` déclare `"engines": { "node": ">=18" }`, cohérent. `package.json:6` déclare `"test": "node --test test/"`. Les tests sont rapides (pas d'I/O, pas de réseau, logique pure) et reproductibles.
-
-**Pas de CI configurée — VÉRIFIÉ_CODE (absence).** Aucun fichier `.github/workflows/`, `.circleci/`, `Jenkinsfile` ni équivalent dans le dépôt. Les tests ne s'exécutent pas automatiquement lors des commits.
+**Absence de test d'intégration** — `VÉRIFIÉ_CODE` : aucun test ne démarre le serveur, ne lui envoie une requête HTTP, et ne vérifie la réponse. Le comportement observable par un client réel (codes HTTP, format de réponse, headers) n'est validé par aucun artefact automatisé.
 
 ## Forces
 
-- **Tests purs et rapides** : aucune dépendance externe, aucun I/O, exécution instantanée.
-- **Fixtures inline** : les tests 1 et 2 injectent leurs propres objets `{ seats, sold }` sans dépendre des données réelles du catalogue — ils resteront valides si les données changent.
-- **Runner natif** : `node:test` sans `devDependency` maintient la philosophie zéro-dépendance du projet.
-- **`isFull` couverte dans ses deux branches** : la logique de détection de transfert complet est validée (même si la fonction n'est pas exposée HTTP).
+- Runner natif (`node:test`) : zéro dépendance externe, aligné avec `package.json:7`.
+- Tests des fonctions pures corrects et indépendants des données en mémoire (construction ad hoc d'objets de test).
+- Guard `require.main === module` (`src/server.js:27`) : la testabilité du serveur est architecturalement prévue.
 
 ## Dettes techniques
 
-- **Route HTTP entièrement non testée** : `src/server.js` n'a aucun test. La fonctionnalité principale du service (`GET /transfers`) n'est pas vérifiée automatiquement.
-- **Test 3 couplé à la donnée** : `listTransfers().length === 3` (`test/transfers.test.js:14`) casse dès qu'un 4e transfert est ajouté, pour une raison non liée à un bug fonctionnel.
-- **`sendJson` non testée** : la seule fonction de sérialisation HTTP n'a aucun test. (`src/server.js:5-8`)
-- **Absence de CI** : les tests ne s'exécutent pas automatiquement.
+- **Aucun test HTTP** : le comportement du serveur est intégralement non testé.
+- **Cas limites manquants** pour `seatsLeft` : `sold === 0`, `sold === seats`, `sold > seats`.
+- **`listTransfers` ne valide pas le contenu** : un test vérifiant les champs et valeurs des objets retournés détecterait une régression de schéma.
 
 ## Zones critiques
 
-- **La route `GET /transfers` n'a pas de test** : c'est l'unique fonctionnalité livrée du service. Un bug dans la projection (mauvais champ omis ou ajouté) ou dans le routage (mauvaise condition) passerait inaperçu. Preuve : aucun import de `src/server.js` dans `test/`.
+- `src/server.js` entier : zéro couverture de test. C'est l'unique point d'entrée du service — son comportement n'est garanti par aucun test.
+- `src/server.js:11` (parsing URL) : le vecteur de crash identifié dans `CODE_HOTSPOTS_AUDIT.md` est aussi le chemin le moins testé.
 
 ## Risques
 
-- **Régression silencieuse sur la route HTTP** : toute modification de `src/server.js` (ajout d'une route, modification de la projection, correction du handler 404) est sans filet. Preuve : `src/server.js:30` — `module.exports = server` — le serveur est testable mais aucun test ne le fait.
-- **Test 3 comme faux signal de qualité** : `listTransfers().length === 3` passe aujourd'hui — mais il valide la donnée, pas la logique. Si la fonction est modifiée pour filtrer ou trier, le test passera toujours tant que 3 transferts existent, masquant un bug éventuel de comportement.
-- **Absence de CI** : sans exécution automatique des tests, une régression peut atteindre `origin/main` sans être détectée.
+- **Régression silencieuse sur le format HTTP** : un refactoring de `sendJson` ou de la projection (`src/server.js:5-8, 14-20`) ne serait détecté par aucun test existant.
+- **Régression sur `seatsLeft` à la frontière** : si la règle de saturation change (ex. seuil à 1 place restante plutôt que zéro), le test existant de `seatsLeft` n'est pas suffisant pour valider la frontière.
 
 ## Recommandations priorisées
 
-1. **Ajouter un test de la route HTTP `GET /transfers`** — importer `server` depuis `src/server.js`, faire une requête HTTP native (`http.request`) ou via `supertest`, et vérifier la structure de la réponse (`status: 200`, `body[0].seatsLeft`, absence de `seats` et `sold`). Le serveur est déjà exporté et prêt. — `src/server.js:30`, `test/`
-2. **Ajouter un test du handler 404** — même approche, requête sur `/inexistant` et vérification `status: 404`, `body.error === "Not found"`. — `src/server.js:23`
-3. **Corriger le test 3** — remplacer `listTransfers().length === 3` par `assert.ok(listTransfers().length > 0)` et `assert.ok(listTransfers().every(t => 'id' in t && 'from' in t))` pour tester le comportement plutôt que la cardinalité des données. — `test/transfers.test.js:14-16`
-4. **Configurer une CI minimale** (GitHub Actions ou équivalent) avec `npm test` sur chaque push/PR.
+1. **Ajouter un test HTTP sur `GET /transfers`** (statut 200, Content-Type, structure du JSON retourné) — couvrir le chemin critique du service — `src/server.js:13-20`
+2. **Ajouter un test HTTP sur le 404** (statut 404, corps `{ error: "Not found" }`) — `src/server.js:23`
+3. **Ajouter les cas limites de `seatsLeft`** : `sold === 0`, `sold === seats` (= 0), `sold > seats` (comportement attendu à décider) — `test/transfers.test.js`
+4. **Renforcer le test `listTransfers`** : vérifier la structure des objets retournés (présence des champs `id, from, to, price, seatsLeft`) en plus du compte
 
 ## Questions ouvertes
 
-- `supertest` sera-t-il introduit pour les tests d'intégration HTTP, ou préfère-t-on rester sur `http.request` natif pour préserver la politique zéro-dépendance ?
-- Le test de cardinalité (`length === 3`) est-il intentionnel — pour vérifier que le catalogue de démonstration n'a pas été altéré — ou est-ce un test de comportement mal formulé ? La réponse détermine si la recommandation 3 s'applique.
-- Des tests e2e (client → API → réponse JSON) sont-ils prévus au niveau du projet `shift-pilot-resa-web` pour couvrir la chaîne complète ?
+- Un test d'intégration HTTP est-il attendu dans ce pilote, ou la décision est-elle de ne pas en écrire jusqu'à l'implémentation de l'endpoint de réservation ?
+- Le comportement de `seatsLeft` pour `sold > seats` doit-il lever une erreur ou retourner `0` (saturation safe) ? Cette décision détermine quels cas de test écrire.

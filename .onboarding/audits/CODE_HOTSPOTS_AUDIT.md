@@ -4,59 +4,74 @@
 
 ## Compréhension globale
 
-Le projet est trop petit (deux fichiers source, 53 lignes de code effectif) pour présenter des points chauds au sens classique du terme (fichiers de 500 lignes, couplages profonds, classes dieu). L'audit porte ici sur les zones qui **concentrent plusieurs responsabilités** ou qui seraient les premiers points de changement et de risque lors d'une évolution — et non sur des pathologies actuelles.
+Avec 3 fichiers source et ~68 lignes de code, la notion de « hotspot » se réduit à quelques loci très précis. Il n'existe pas de fichier gonflé, pas de couplage circulaire, pas de code mort significatif. Les zones à risque sont deux : `src/server.js:11` (URL parsing sans garde), et `src/transfers.js:9-11` (référence mutable exposée). Un troisième point — `isFull` exportée mais non câblée à HTTP — est une bombe à retardement documentaire pour un développeur futur.
 
 ## Résumé exécutif
 
-Le seul point chaud identifiable est le callback de `http.createServer` dans `src/server.js:10-23`. En 14 lignes, il accomplit : réception de la requête, parsing de l'URL, routage par pathname et méthode HTTP, appel à la couche données, projection du modèle interne vers la réponse API, sérialisation JSON, et cas par défaut 404. Pour une route unique, c'est lisible. C'est le point de croissance naturelle de l'application : chaque nouvelle route, nouveau cas d'erreur ou nouveau comportement transversal (logging, authentification) s'y accumule.
-
-`src/transfers.js:3-7` est le second point de changement : tout ajout de donnée, de champ ou de trajet y passe. Son risque est limité par la nature statique du tableau.
-
-Il n'y a pas de fichier gros, pas de classe complexe, pas de couplage profond, pas de fonction sans tests — à l'exception de `sendJson` et du handler HTTP complet. Les deux fichiers source sont correctement scopés.
+La base de code est trop petite pour présenter des hotspots classiques (fichier de 600 lignes, classe God, couplage afférent élevé). Les risques sont concentrés sur deux lignes précises dans deux fichiers. Le risque le plus sévère est `src/server.js:11` : une exception non attrapée dans le handler HTTP peut faire crasher le process sur n'importe quelle requête malformée. Le second risque, `src/transfers.js:9-11`, est latent : `listTransfers()` retourne la référence interne du tableau, ce qui devient un vecteur de corruption silencieuse dès l'ajout d'un endpoint mutable. La fonction `isFull` est exportée sans être consommée par le serveur HTTP — son existence non câblée représente un risque de réimplémentation divergente par un développeur futur.
 
 ## Constats détaillés
 
-**`src/server.js:10-23` — le callback de routage polyvalent — VÉRIFIÉ_CODE.** Ce bloc de 14 lignes porte les responsabilités suivantes : (1) parsing de l'URL (`new URL(req.url, ...)`), (2) routage (`if url.pathname === "/transfers" && req.method === "GET"`), (3) appel à `listTransfers()`, (4) projection `.map()` vers le format de réponse API, (5) appel à `seatsLeft(t)` pour chaque transfert, (6) sérialisation via `sendJson`, et (7) cas 404 par défaut. C'est le carrefour de toute la logique applicative. Dans le code actuel, ce bloc est lisible d'un coup d'œil ; il deviendra difficile à maintenir dès la troisième ou quatrième route.
+**Hotspot 1 : `src/server.js:11` — parsing URL non gardé**
 
-**`src/transfers.js:3-7` — la donnée centrale — VÉRIFIÉ_CODE.** Le tableau `transfers` est le seul état de l'application. Toute modification (ajout d'un transfert, changement de prix, correction d'un `sold`) passe par ce fichier. Ce n'est pas une complexité dangereuse dans l'état actuel, mais c'est l'unique point de couplage entre les données et tous leurs consommateurs (`listTransfers`, `seatsLeft`, `isFull`, les tests).
+`VÉRIFIÉ_CODE` : `const url = new URL(req.url, \`http://${req.headers.host}\`);` est appelé pour chaque requête HTTP entrante, sans bloc `try/catch`. Le constructeur `URL` lève une `TypeError: Invalid URL` lorsque l'URL n'est pas parseable. Exemples déclencheurs : une requête HTTP/0.9 sans chemin, un scan de ports envoyant une ligne de requête non conforme (`CONNECT example.com:443 HTTP/1.1`), ou un payload d'un fuzzer. Cette ligne est la seule dans le codebase où une exception peut échapper au handler — et elle se trouve sur le chemin critique de chaque requête. Le risque est amplifié par l'absence de tout gestionnaire `process.on('uncaughtException')` dans le code source (`src/server.js` relu en entier).
 
-**`src/server.js:5-8` — `sendJson` — VÉRIFIÉ_CODE.** Cette fonction utilitaire de 4 lignes est le seul point de sérialisation HTTP de l'API. Elle n'est pas testée directement (voir `TESTING_AUDIT.md`). Elle est utilisée à deux endroits : route `GET /transfers` (`src/server.js:14`) et handler 404 (`src/server.js:23`). Elle n'est pas importable/partageable sans passer par `server.js`. Son périmètre est minimal.
+Ce hotspot est directement lié au workflow `LISTE_TRANSFERTS` (l'unique workflow HTTP du service) : tout appel à `GET /transfers` passe par cette ligne. Un crash ici rend le service entièrement indisponible.
 
-**Aucun fichier « gros » — VÉRIFIÉ_CODE.** `src/server.js` : 31 lignes. `src/transfers.js` : 22 lignes. `test/transfers.test.js` : 17 lignes. Aucun des seuils classiques (> 200 lignes, > 10 fonctions, > 5 paramètres) n'est atteint.
+**Hotspot 2 : `src/transfers.js:9-11` — référence mutable retournée**
 
-**Couplage entre `src/server.js` et `src/transfers.js` — VÉRIFIÉ_CODE.** `src/server.js:3` importe `{ listTransfers, seatsLeft }` depuis `./transfers`. C'est le seul couplage inter-fichier du projet. Il est minimal, explicite, et ne crée pas de dépendance circulaire.
+`VÉRIFIÉ_CODE` : 
+```js
+function listTransfers() {
+  return transfers;  // référence directe au tableau module-level
+}
+```
+L'appelant actuel (`src/server.js:14`) utilise `.map()` sans muter. Mais `listTransfers()` est une API publique du module — tout futur code qui appelle `listTransfers()` et modifie un élément retourné mute l'état global du process. Ce pattern est un vecteur de bugs silencieux : la mutation ne lève pas d'erreur, ne produit pas de log, et se manifeste des requêtes plus tard.
 
-**`isFull` — fonction orpheline à risque de confusion — VÉRIFIÉ_CODE.** `src/transfers.js:17-19` exporte `isFull` ; `src/server.js:3` ne l'importe pas. `test/transfers.test.js:3` l'importe pour les tests. Cette dissymétrie entre l'API HTTP (qui n'expose pas `isFull`) et les tests (qui la valident) peut induire en erreur un nouveau développeur qui chercherait à supprimer la fonction « inutilisée » ou, à l'inverse, à s'appuyer dessus pour filtrer les transferts disponibles sans réaliser qu'elle n'est pas exposée.
+Ce point est central au workflow `CALCUL_DISPONIBILITE` : si `sold` est muté par un chemin indirect (futur endpoint de réservation passant par `listTransfers()`), les calculs de disponibilité deviennent imprévisibles.
+
+**Hotspot 3 : `isFull` — exportée, non consommée côté HTTP**
+
+`VÉRIFIÉ_CODE` : `src/transfers.js:17-21` définit et exporte `isFull`. `src/server.js:3` importe `{ listTransfers, seatsLeft }` — `isFull` en est absent. `isFull` n'est utilisée que dans `test/transfers.test.js:9-12`. `HYPOTHÈSE` : l'export était préparatoire pour un futur endpoint qui filtrerait les transferts complets ou bloquerait une réservation sur un transfert plein. Sans cette connaissance, un développeur ajoutant ce feature pourrait réécrire la règle `seatsLeft(t) === 0` indépendamment, créant une divergence potentielle si la définition de saturation évolue.
+
+**Absence de code mort significatif**
+
+`VÉRIFIÉ_CODE` : revue de tous les exports — `listTransfers`, `seatsLeft`, `isFull` sont les trois exports de `transfers.js`. `listTransfers` et `seatsLeft` sont consommés par `server.js:3`. `isFull` est consommée par le test (`test/transfers.test.js:3`). `server` est exporté par `server.js:30` (consommé par les tests potentiels). Il n'existe pas de code mort inutilisé.
+
+**Complexité cyclomatique**
+
+`VÉRIFIÉ_CODE` : toutes les fonctions sont à complexité 1-2. `sendJson` : 0 branche. `listTransfers` : 0 branche. `seatsLeft` : 0 branche. `isFull` : 0 branche. Le handler HTTP : 1 branche (`if pathname === '/transfers' && method === 'GET'`). Pas de boucles imbriquées, pas de récursion.
 
 ## Forces
 
-- **Fichiers petits et scopés** : aucun fichier ne dépasse 31 lignes. (`src/server.js:1-31`, `src/transfers.js:1-22`)
-- **Un seul couplage inter-fichier, explicite** : `require("./transfers")` à `src/server.js:3`.
-- **Fonctions pures dans la couche métier** : `seatsLeft` et `isFull` (`src/transfers.js:13-19`) n'ont pas d'effets de bord et sont testables isolément.
-- **Guard `require.main`** : permet à `src/server.js` d'être importé sans lancer le serveur (`src/server.js:27`), ce qui empêche des effets de bord accidentels lors des imports.
+- Complexité cyclomatique minimale : toutes les fonctions sont triviales à lire et à tester.
+- Guard `require.main === module` : `src/server.js:27` — architecture testable, pas de side-effect à l'import.
+- Pas de code mort inutile : tous les exports sont consommés quelque part.
 
 ## Dettes techniques
 
-- **Projection et logique de route non séparées** : le mapping du modèle interne vers la réponse API est inline dans le handler (`src/server.js:14-20`), non extractible ni testable indépendamment sans modifier le handler.
-- **`isFull` exportée mais non câblée** (`src/transfers.js:17-21`) : fonction testée mais morte côté HTTP — risque de confusion sur son statut (à conserver, à supprimer, à exposer ?).
+- **`src/server.js:11` sans `try/catch`** — vecteur de crash actif sur requête malformée.
+- **`listTransfers()` retourne une référence** (`src/transfers.js:10`) — vecteur de mutation silencieuse.
+- **`isFull` non câblée à HTTP** — risque de réimplémentation divergente dans le futur.
 
 ## Zones critiques
 
-- **`src/server.js:10-23`** : c'est l'unique point de croissance de l'application. Un senior regarderait ce bloc en premier lors de tout ajout de route, car c'est là que s'accumuleront les responsabilités.
-- **`src/transfers.js:3-7`** : le tableau de données. Toute migration vers une base persistante passe par une réécriture de ce fichier et de ses consommateurs.
+- `src/server.js:11` — parsing URL : chemin critique de toutes les requêtes, sans protection d'erreur.
+- `src/transfers.js:9-11` — `listTransfers` : API publique exposant l'état interne mutable.
 
 ## Risques
 
-- **Accumulation de logique dans le callback** : sans extraction du routage et de la projection, la maintenabilité du handler se dégrade linéairement avec le nombre de routes. À 3 routes, il deviendra difficile à lire ; à 5, risqué à modifier sans régression. Preuve de l'état actuel : `src/server.js:10-23`.
-- **Fonction `isFull` mal comprise** : un nouveau développeur pourrait la supprimer (elle ne sert à rien en production) et casser les tests, ou l'ajouter à une route sans réaliser que le filtre n'a pas été pensé côté API. Preuve : `src/transfers.js:17-21` vs `src/server.js:3`.
+- **Crash de process** sur `src/server.js:11` (URL malformée, hôte manquant) : service entièrement indisponible jusqu'au redémarrage.
+- **Mutation silencieuse de l'état global** via `listTransfers()` (`src/transfers.js:10`) : bugs intermittents difficiles à diagnostiquer si plusieurs endpoints modifient les objets retournés.
+- **Réimplémentation divergente de `isFull`** : si un futur développeur ne voit pas la fonction exportée (`src/transfers.js:17-21`) et réécrit `seatsLeft(t) === 0` localement, deux définitions de saturation coexisteron — un désaccord silencieux.
 
 ## Recommandations priorisées
 
-1. **Extraire la projection** — créer `formatTransfer(t)` dans `src/transfers.js` ou un fichier `src/formatters.js` — pour rendre la transformation modèle→API testable et réutilisable. — `src/server.js:14-20`
-2. **Clarifier le statut de `isFull`** — soit la câbler à la route (`?available=true`), soit la retirer de l'export public et la garder en utilitaire interne non exporté — pour éviter la confusion. — `src/transfers.js:17-21`, `src/server.js:3`
-3. **Préparer une abstraction de routage** avant la deuxième route — un `Map<string, handler>` ou un tableau de `{ method, pathname, handler }` — pour que la logique de dispatch ne s'accumule pas dans le callback. — `src/server.js:13-23`
+1. **Wrapper `new URL(...)` dans un `try/catch`** avec réponse `400 Bad Request` — `src/server.js:11` — priorité haute, risque actif
+2. **Retourner `[...transfers]` dans `listTransfers()`** — `src/transfers.js:10` — priorité moyenne, risque latent
+3. **Documenter `isFull`** (commentaire ou JSDoc sur l'export) sur son rôle préparatoire — `src/transfers.js:17` — priorité basse, risque documentaire
 
 ## Questions ouvertes
 
-- `isFull` est-elle destinée à être exposée via une route de filtrage (`GET /transfers?available=true`) dans le backlog ? Son existence et ses tests laissent penser que oui — mais aucune route ne l'utilise.
-- La projection `{ id, from, to, price, seatsLeft }` est-elle stable ? Si `shift-pilot-resa-web` s'y est adapté, tout changement de champ est un breaking change d'API.
+- Y a-t-il un superviseur de process (PM2, Docker restart policy) qui redémarrerait automatiquement le serveur après un crash ? Sans lui, le service reste down jusqu'à intervention manuelle.
+- `isFull` est-elle prévue pour être câblée à un endpoint existant dans `shift-pilot-resa-web` ou dans un futur endpoint de ce service ?

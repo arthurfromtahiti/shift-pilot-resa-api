@@ -1,39 +1,50 @@
-# Relecture — CDC_FONCTIONNEL.md
+# Relecture — CDC_FONCTIONNEL
 
 ## Verdict global
 
-**Bon** — CDC précis et complet, intégralement traçable à WORKFLOW_GET_TRANSFERS et FUNCTIONAL_AUDIT. Toutes les numéros de ligne sont vérifiés corrects. Les données du catalogue (capacités, places vendues, prix, seatsLeft calculés) sont exactes au code source. Les hypothèses sont marquées. Aucun bloquant.
+**Bon** — Le CDC est substantiel, bien sourcé et fidèle au code. Chaque règle métier (`seatsLeft`, `isFull`, projection JSON) cite sa ligne de code. Les hypothèses sont regroupées et marquées. Les non-fonctionnalités (réservation, persistance, filtrage) sont explicitement délimitées. Deux points mineurs signalés ci-dessous, aucun bloquant.
+
+---
 
 ## Problèmes bloquants
 
 Aucun.
 
+---
+
 ## Problèmes mineurs
 
-- **Section "Recommandations pour l'évolution"** : présente dans un CDC mais marginale sur le fond — toutes les recommandations sont tracées (FUNCTIONAL_AUDIT reco 1-4, ARCHITECTURE_AUDIT reco 1-3). Ce n'est pas une invention ; c'est une section de conseil non conventionnelle dans un CDC. Le producteur peut la conserver ou la déplacer en annexe à sa discrétion.
+**[M1] URL d'intégration non marquée HYPOTHÈSE (§ Intégrations déclarées, ligne ~165)**
+
+> « Intégration attendue : `fetch('http://api:3100/transfers')` ou similaire »
+
+La mention `ou similaire` en fait clairement un exemple, mais l'URL `http://api:3100` n'est présente dans aucun document amont (ni dans `WORKFLOW_LISTE_TRANSFERTS.md`, ni dans les audits, ni dans `README.md:4` qui mentionne seulement le nom du dépôt frontend). Elle devrait être préfixée `HYPOTHÈSE` ou reformulée en `http://localhost:3100/transfers` (seule URL prouvée par le code). Source amont consultée : `WORKFLOW_LISTE_TRANSFERTS.md § Intégrations` — zéro mention de l'URL d'appel.
+
+**[M2] Déclencheur du parcours utilisateur non prouvé (§ Parcours utilisateur principal, ligne ~35)**
+
+> « Déclencheur : accès au frontend `shift-pilot-resa-web`, affichage du catalogue. »
+
+Le fait que le frontend provoque ce déclencheur est une inférence du `README.md:4` — aucun workflow ni audit ne précise le déclencheur UI-level. `WORKFLOW_LISTE_TRANSFERTS.md` parle de « Client HTTP externe » sans décrire le déclencheur frontal. Acceptable en contexte pilote mais devrait porter une balise `HYPOTHÈSE`.
+
+---
 
 ## Points vérifiés et corrects
 
-- **Contexte métier** : périmètre lecture seule, pas de route POST/PUT/DELETE, absence de persistance, consommateur `shift-pilot-resa-web` → WORKFLOW_GET_TRANSFERS + FUNCTIONAL_AUDIT. ✓
-- **Acteurs et capacités** → tous issus de FUNCTIONAL_AUDIT section "Fonctionnalité livrée / Réservation absente". ✓
-- **Parcours utilisateur — étapes 1 à 6** avec numéros de ligne exacts :
-  - `src/server.js:10-13` (callback + routage) → vérifié lignes 10-13. ✓
-  - `src/transfers.js:9-11` (`listTransfers()`) → vérifié lignes 9-11. ✓
-  - `src/server.js:14-20` (`.map()` + `seatsLeft`) → vérifié lignes 14-20. ✓
-  - `src/server.js:5-8` (`sendJson`) → vérifié lignes 5-8. ✓
-  - `src/server.js:23` (404) → vérifié ligne 23. ✓
-- **Exemple de réponse JSON** :
-  - Papeete→Moorea : seats:40, sold:12 → seatsLeft = 28. ✓ (`src/transfers.js:4`)
-  - Papeete→Bora Bora : seats:60, sold:60 → seatsLeft = 0. ✓ (`src/transfers.js:5`)
-  - Raiatea→Tahaa : seats:20, sold:5 → seatsLeft = 15. ✓ (`src/transfers.js:6`)
-- **Table du catalogue** (ID, origine, destination, capacité, vendues, prix) → conforme à `src/transfers.js:3-7` vérifié. ✓
-- **Règle "Encapsulation du stock"** → `src/server.js:14-20` : projection `.map()` exclut `seats` et `sold`. ✓
-- **Règle "`isFull` non exposée"** → `src/transfers.js:17-19` + `src/server.js:3` (import sans isFull) + `test/transfers.test.js:9-12`. ✓
-- **Hypothèse devise XPF** → marquée explicitement `Hypothèse`. ✓
-- **Workflow de test** : 3 tests, leurs descriptions, code 0/≠0 → WORKFLOW_SUITE_TESTS + `test/transfers.test.js:5-16` vérifié. ✓
-- **Absences significatives** (devise, date/heure, isFull) → FUNCTIONAL_AUDIT section "Absences". ✓
-- **Questions ouvertes** → reprises de FUNCTIONAL_AUDIT et WORKFLOW_GET_TRANSFERS sans invention. ✓
+- **Règle seatsLeft** : `seats - sold`, sourçage `transfers.js:13-15` — confirmé dans `WORKFLOW_CALCUL_DISPONIBILITE.md § Règles métier` et `FUNCTIONAL_AUDIT.md`.
+- **Règle isFull** : `seatsLeft === 0`, binaire, sourçage `transfers.js:17-19` — confirmé dans `WORKFLOW_CALCUL_DISPONIBILITE.md`.
+- **Données du catalogue** : 3 transferts, valeurs id/from/to/seats/sold/price/seatsLeft — confirmées dans `WORKFLOW_LISTE_TRANSFERTS.md § Données` et `CODE_HOTSPOTS_AUDIT.md`.
+- **Projection JSON** : exclusion de `seats` et `sold` — `VÉRIFIÉ_CODE` dans `FUNCTIONAL_AUDIT.md` (server.js:14-20).
+- **404 catch-all** : toute URL non reconnue → `{ error: "Not found" }` statut 404 — `FUNCTIONAL_AUDIT.md § Route 404 catch-all`.
+- **Crash URL malformée** : correctement qualifié comme risque actif — `SECURITY_ROBUSTNESS_AUDIT.md § Crash sur URL malformée`.
+- **CORS absent** : bloquant pour le frontend — `SECURITY_ROBUSTNESS_AUDIT.md § Absence de headers CORS`.
+- **isFull orpheline** : exportée non câblée — `FUNCTIONAL_AUDIT.md § isFull non exposée côté HTTP`, `CODE_HOTSPOTS_AUDIT.md § Hotspot 3`.
+- **Hypothèses** : trois scénarios futurs pour `sold` (endpoint POST, synchro externe, fixture de test) — bien marqués HYPOTHÈSE, cohérents avec `FUNCTIONAL_AUDIT.md § Questions ouvertes`.
+- **Questions ouvertes** : toutes tracées à des incertitudes réelles identifiées dans les audits.
+- **Barre de qualité** : synthèse finale conforme au contenu — pas d'invention.
+
+---
 
 ## Recommandations de correction
 
-Aucune correction obligatoire. La section "Recommandations pour l'évolution" est traçable et ne nuit pas à la fiabilité du document.
+1. **[M1]** Remplacer `fetch('http://api:3100/transfers')` par `fetch('http://localhost:3100/transfers') (HYPOTHÈSE — URL illustrative, non confirmée)` ou supprimer la ligne si l'URL n'est pas prouvée.
+2. **[M2]** Ajouter `(HYPOTHÈSE — déduit de README.md:4, non confirmé par un workflow)` après le déclencheur UI.

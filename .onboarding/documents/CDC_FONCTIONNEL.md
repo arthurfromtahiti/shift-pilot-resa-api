@@ -1,86 +1,51 @@
 # CDC_FONCTIONNEL — shift-pilot-resa-api
 
-> **Confiance : high** — tous les cas d'usage et règles métier sont issus de la lecture directe du code source (`src/`, `test/`).
+Cahier des charges fonctionnel. Décrit ce que le logiciel fait, pour qui, selon quelles règles.
+
+> Confiance : high
 
 ## Contexte métier
 
-**API de consultation de catalogue de transferts inter-îles** destinée à être consommée par une application web ou mobile (`shift-pilot-resa-web`). Le produit couvre la **moitié lecture** d'un système de réservation de transferts : affichage de l'offre, consultation des tarifs et de la disponibilité. La **moitié écriture** (prise de réservation, paiement, annulation) est **hors périmètre** de ce dépôt (absent du code, pas de route POST/PUT/DELETE).
+Service de consultation de transferts inter-îles en Polynésie française. L'objectif : permettre aux clients (via l'application frontend `shift-pilot-resa-web`) de découvrir les trajets disponibles et leur disponibilité instantanée avant de réserver. Le système ne traite actuellement pas la réservation elle-même.
 
-**Périmètre clairement délimité** : l'API sert un seul objectif fonctionnel = exposer une liste de trajets disponibles avec leurs caractéristiques (prix, places restantes). C'est un pilote de démonstration, pas un produit en production avec gestion d'historique, authentification client, ou traçabilité des changements.
-
----
+Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions d'accès (catalogue public).
 
 ## Acteurs et capacités
 
-### Clients externes (lecteurs)
+### Client HTTP externe
+- **Capacité** : consulter la liste des transferts avec disponibilité.
+- **Restrictions** : accès en lecture seule. Pas de création, modification, suppression.
+- **Canaux** : requête HTTP `GET /transfers` depuis un navigateur web ou une application native.
 
-**Capacités** (ce qu'ils peuvent faire) :
-- Consulter la liste complète des trois transferts (liaisons Papeete↔Moorea, Papeete↔Bora Bora, Raiatea↔Tahaa) avec tarif et places restantes.
-- Connaître l'état d'occupation de chaque trajet sans calcul client.
+### Serveur Node.js (`src/server.js`)
+- **Capacité** : recevoir requêtes HTTP, router vers les endpoints, retourner JSON.
+- **Logique** : exposer un catalogue statique avec calcul de disponibilité à chaque appel (pas de cache).
+- **Non-capacité** : persistance, authentification, business logic complexe.
 
-**Interdictions** (ce qu'ils ne peuvent pas faire) :
-- Créer une réservation (aucune route POST).
-- Modifier un transfert (prix, places, trajectoire) — aucune route PUT/DELETE.
-- Filtrer ou rechercher les trajets par origine/destination (pas d'argument de query string implémenté).
-- Authentifier un client.
-
-### Serveur API (producteur)
-
-**Responsabilités** :
-- Maintenir le catalogue de trois transferts en mémoire avec leurs données de stock (`seats`, `sold`) et de tarification.
-- Calculer `seatsLeft = seats - sold` pour chaque transfert.
-- Exposer le catalogue via HTTP en projetant la réponse (`{ id, from, to, price, seatsLeft }`).
-- Gérer les requêtes HTTP malformées (retour 404 pour un chemin inconnu).
-
-**Hors périmètre** :
-- Persistance durable (base de données) — tout est perdu au redémarrage du serveur.
-- Authentification/autorisation.
-- Prise de réservation, mutation du stock.
-- Logging, monitoring, tracing.
+### Module de logique métier (`src/transfers.js`)
+- **Capacité** : fournir primitives de calcul (`seatsLeft`, `isFull`) et accès au catalogue (`listTransfers`).
+- **Constraints** : fonctions pures, déterministes, sans I/O.
 
 ---
 
-## Parcours utilisateur principal
+## Parcours utilisateur principal : Consulter les transferts disponibles
 
-**Nom** : `Consultation du catalogue de transferts`  
-**Acteur** : Client web  
-**Criticité** : Haute — c'est l'unique service rendu par l'API dans son état actuel  
-**Type** : API flow (lecture)
+**Objectif** : le client obtient la liste complète des trajets avec places restantes.
 
-### Déroulement
+**Déclencheur** : accès au frontend `shift-pilot-resa-web`, affichage du catalogue.
 
-1. **Initiation** : Le client web envoie une requête `GET /transfers` au serveur.
+**Déroulement** :
 
-2. **Réception et routage** (`src/server.js:10-13`).
-   - Le serveur reçoit la requête via le callback `http.createServer`.
-   - L'URL est parsée : `new URL(req.url, 'http://' + req.headers.host)`.
-   - Le routage vérifie `url.pathname === "/transfers" && req.method === "GET"`.
-   - Si OK → continuer à l'étape 3. Si non → retour 404 (étape 6).
+1. Client HTTP envoie `GET /transfers` au serveur.
+2. Serveur reçoit la requête, valide qu'il s'agit de la bonne route et de la bonne méthode (`pathname === "/transfers" && method === "GET"` — `server.js:13`).
+3. Serveur appelle `listTransfers()` qui retourne le tableau en mémoire des 3 transferts avec tous leurs champs (`transfers.js:3-7`).
+4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:14-20`).
+5. Le calcul de `seatsLeft` pour chaque transfert s'effectue par `seatsLeft(transfer) = transfer.seats - transfer.sold` (`transfers.js:13-15`).
+6. Serveur sérialise le tableau projeté en JSON et l'envoie au client avec statut 200 et header `Content-Type: application/json` (`server.js:5-8`).
 
-3. **Récupération du catalogue** (`src/transfers.js:9-11`).
-   - `listTransfers()` est appelée.
-   - Retour : tableau brut de 3 objets `{ id, from, to, seats, sold, price }` depuis `src/transfers.js:3-7`.
-
-4. **Transformation et calcul** (`src/server.js:14-20`).
-   - Pour chaque transfert, appel de `seatsLeft(t) = t.seats - t.sold` (`src/transfers.js:13-15`).
-   - Projection : construction d'un nouvel objet `{ id, from, to, price, seatsLeft }`.
-   - Les champs `seats` et `sold` sont exclus de la réponse (encapsulation).
-
-5. **Sérialisation et envoi** (`src/server.js:5-8`).
-   - La réponse est sérialisée en JSON via `JSON.stringify`.
-   - Header `Content-Type: application/json` et statut HTTP 200 sont fixés.
-   - Réponse retournée au client.
-
-6. **Cas alternatif — chemin inconnu** (`src/server.js:23`).
-   - Toute autre combinaison (mauvais chemin, mauvaise méthode) tombe dans le défaut.
-   - Réponse : `404 { error: "Not found" }`.
-
-### Exemple de réponse réussie
+**État observé par le client** : réponse JSON bien formée contenant 3 objets, chacun avec `id, from, to, price, seatsLeft` :
 
 ```json
-HTTP/1.1 200 OK
-Content-Type: application/json
-
 [
   { "id": 1, "from": "Papeete", "to": "Moorea", "price": 3500, "seatsLeft": 28 },
   { "id": 2, "from": "Papeete", "to": "Bora Bora", "price": 21000, "seatsLeft": 0 },
@@ -88,180 +53,166 @@ Content-Type: application/json
 ]
 ```
 
-### Exemple de réponse d'erreur
+**Résultat** : client affiche les trajets et leur disponibilité au voyageur.
+
+---
+
+## Ensemble de données
+
+### Notion fondamentale : Transfert (trajet inter-îles)
+
+Représente un trajet régulier entre deux îles, avec capacité et ventes enregistrées.
+
+| Champ | Type | Rôle | Exemple |
+|-------|------|------|---------|
+| `id` | entier | identifiant unique du transfert | `1, 2, 3` |
+| `from` | chaîne | ville/île de départ | `"Papeete"` |
+| `to` | chaîne | ville/île de destination | `"Moorea"` |
+| `seats` | entier | capacité totale du trajet (places disponibles au démarrage) | `40, 60, 20` |
+| `sold` | entier | places vendues (hardcodé, jamais incrémenté dans le code source actuel) | `12, 60, 5` |
+| `price` | entier | prix unitaire en XPF (francs CFP polynésiens) | `3500, 21000, 1800` |
+
+Schéma implicite (pas de TypeScript, pas de validation de schéma au runtime).
+
+**État observable du catalogue** (données figées dans `transfers.js:3-7`) :
+
+| id | from | to | seats | sold | seatsLeft | price |
+|----|------|-----|-------|------|-----------|-------|
+| 1 | Papeete | Moorea | 40 | 12 | 28 | 3500 |
+| 2 | Papeete | Bora Bora | 60 | 60 | 0 | 21000 |
+| 3 | Raiatea | Tahaa | 20 | 5 | 15 | 1800 |
+
+**Projection exposée au client** (ce que `GET /transfers` retourne) : `{ id, from, to, price, seatsLeft }` — jamais `seats` ni `sold`.
+
+---
+
+## Règles métier
+
+### Disponibilité d'un transfert
+**Places restantes = capacité totale − places vendues**
+
+$$seatsLeft(t) = t.seats - t.sold$$
+
+Implémentation : `src/transfers.js:13-15`
+
+**Domaine de validité** : mathématiquement, le résultat peut être négatif si `sold > seats` (cas de survente), mais le code n'effectue aucune validation et retournerait silencieusement un nombre négatif. Aucune garde documentée à ce jour.
+
+### Saturation d'un transfert
+**Un transfert est saturé si aucune place restante n'est disponible**
+
+$$isFull(t) = (seatsLeft(t) === 0)$$
+
+Implémentation : `src/transfers.js:17-19`
+
+C'est une comparaison binaire : saturation oui/non, pas de seuil de « presque complet ».
+
+**Corollaire** : le transfert id 2 (Papeete→Bora Bora) est saturé dès le démarrage (`sold: 60 = seats: 60`).
+
+### Projection JSON
+**Le client n'obtient que les données calculées et publiques**, jamais l'état interne de vente.
+
+Les champs `seats` et `sold` n'apparaissent jamais dans la réponse HTTP. Le client voit uniquement :
+- `id, from, to, price` (données statiques du trajet)
+- `seatsLeft` (valeur calculée)
+
+**Cohérence** : tous les transferts retournés, y compris les saturés (id 2). Aucun filtrage côté serveur.
+
+### Aucune authentification, aucune autorisation
+L'endpoint est public. N'importe quel client HTTP peut l'appeler. Pas de vérification d'identité, pas de token, pas de contrôle d'accès.
+
+---
+
+## Cas de non-fonctionnement (hors périmètre)
+
+### Réservation d'une place
+Inexistant. Aucun endpoint `POST`, `PUT`, `PATCH` ni `DELETE` n'existe. Le champ `sold` ne peut pas être incrémenté via l'API.
+
+### Modification du catalogue
+Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:3`) réinitialisée à chaque démarrage du serveur.
+
+### Persistance de réservations
+Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées.
+
+### Filtrage côté serveur
+Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
+
+---
+
+## Comportement sur requête invalide
+
+**Toute requête qui ne correspond pas à `GET /transfers`** retourne `404 Not found` :
 
 ```json
-HTTP/1.1 404 Not Found
-Content-Type: application/json
-
 { "error": "Not found" }
 ```
 
----
+Statut HTTP : `404`. Content-Type : `application/json`.
 
-## Règles métier (exigences fonctionnelles)
+Exemples de requêtes 404 :
+- `GET /` (route invalide)
+- `GET /transfers/1` (route invalide)
+- `POST /transfers` (méthode non supportée)
+- `GET /catalogue` (route invalide)
+- Toute URL malformée qui parse correctement
 
-### Catalogue fixe
-
-**Règle** : L'API expose exactement **trois transferts** codés en dur en mémoire (`src/transfers.js:3-7`).
-
-| Transfert | Origine | Destination | Capacité | Vendues | Prix |
-|-----------|---------|-------------|----------|---------|------|
-| ID 1 | Papeete | Moorea | 40 places | 12 | 3 500 XPF* |
-| ID 2 | Papeete | Bora Bora | 60 places | 60 | 21 000 XPF* |
-| ID 3 | Raiatea | Tahaa | 20 places | 5 | 1 800 XPF* |
-
-**Preuve** : `src/transfers.js:3-7`  
-**Hypothèse** : l'unité monétaire est le franc Pacifique (XPF) — inféré du contexte géographique (Polynésie française), jamais explicité dans le code.
-
-### Calcul des places restantes
-
-**Règle** : `seatsLeft(transfer) = transfer.seats - transfer.sold`
-
-Exemple pour Papeete→Moorea :
-- Capacité : 40 places
-- Vendues : 12
-- Restantes : 40 − 12 = 28
-
-**Preuve** : `src/transfers.js:13-15`  
-**Importance** : c'est le signal d'occupation affichable côté client ; elle doit être exacte.  
-**Calcul** : atomique, sans état externe — recalculé à chaque requête `GET /transfers`.
-
-### Encapsulation du stock
-
-**Règle** : Les champs `seats` et `sold` **ne sont jamais exposés** dans la réponse HTTP. Seul `seatsLeft` (valeur calculée) et les métadonnées de trajet (`id`, `from`, `to`, `price`) sont retournés.
-
-**Preuve** : `src/server.js:14-20`  
-**Objectif** : préserver la liberté d'évoluer la représentation interne du stock sans casser l'API. Un client ne voit pas la mécanique interne, seulement le résultat (`places restantes`).
-
-### Pas d'écriture sur le stock
-
-**Règle** : Aucun chemin du code n'incrémente ou ne décrémente le champ `sold`. Le stock reste figé à sa valeur initiale pour toute la durée de vie du processus.
-
-**Preuve** : Recherche `grep -niE "sold\s*=" src/` → résultats = `src/transfers.js:4-6` (déclaration initiale seulement).  
-**Conséquence** : Bora Bora reste « complet » (seatsLeft = 0) sans qu'aucune réservation n'ait eu lieu — artefact de donnée volontaire pour un pilote.
-
-### Fonction `isFull` implémentée mais non exposée
-
-**Définition** : `isFull(transfer) = seatsLeft(transfer) === 0` (`src/transfers.js:17-19`)
-
-**Statut** : Exportée (`src/transfers.js:21`), testée (`test/transfers.test.js:9-12`), mais **jamais importée dans `src/server.js`** et **n'apparaît pas dans la réponse HTTP**.
-
-**Interprétation** : Deux scénarios possibles :
-1. Préparation pour une future route de filtrage (`GET /transfers?available=true` retournant uniquement les transferts avec `seatsLeft > 0`).
-2. Logique anticipée mais abandon — à clarifier.
-
-**Impact** : Un client qui souhaite afficher uniquement les transferts disponibles doit calculer `seatsLeft === 0` lui-même ; il n'y a pas de champ `isFull` ou de filtre serveur.
-
-**Preuve** : `src/transfers.js:17-21`, `src/server.js:3` (absence d'import), `test/transfers.test.js:9-12` (tests)
+**Risque d'exception non attrapée** : si l'URL est strictement non parseable (ex. caractères interdits, structure HTTP/0.9), `new URL(...)` lève une `TypeError` qui n'est pas attrapée (`server.js:11` sans try/catch). Le process Node.js crashe. Voir `CODE_HOTSPOTS_AUDIT.md`, `SECURITY_ROBUSTNESS_AUDIT.md`.
 
 ---
 
-## Données observées
+## Intégrations déclarées
 
-### Entité `Transfer`
+### Consommateur : `shift-pilot-resa-web`
+Frontend React/Vue/autre, mentionné dans `README.md:4` comme consommateur de cette API. Détails du frontend hors périmètre. Intégration attendue : `fetch('http://api:3100/transfers')` ou similaire depuis le navigateur.
 
-Structure interne (voir par le développeur, jamais exposée directement au client) :
+**Risque CORS** : le frontend sera bloqué si tournant sur une origine différente (`http://localhost:3000` vs `http://localhost:3100`). Aucun header `Access-Control-Allow-Origin` n'est actuellement posé. Voir `SECURITY_ROBUSTNESS_AUDIT.md`.
 
-```javascript
-{
-  id:    number,      // Entier séquentiel (1, 2, 3)
-  from:  string,      // Origine (ex. "Papeete")
-  to:    string,      // Destination (ex. "Moorea")
-  seats: number,      // Capacité totale
-  sold:  number,      // Places vendues (jamais mise à jour en runtime)
-  price: number       // Tarif (unité supposée XPF, non documentée)
-}
-```
-
-**Projection API** (ce que le client reçoit) :
-
-```javascript
-{
-  id:        number,  // Identifiant du transfert
-  from:      string,  // Origine
-  to:        string,  // Destination
-  price:     number,  // Tarif
-  seatsLeft: number   // Calcul : seats - sold
-}
-```
-
-**Règle d'encapsulation** : `seats` et `sold` sont masqués ; seul `seatsLeft` (dérivé) est exposé.
-
-### Absences significatives
-
-| Donnée | Statut | Impact |
-|--------|--------|--------|
-| Devise | Absent, supposée XPF | Client doit connaître la devise hors API pour afficher correctement le prix |
-| Date/heure de départ | Absent | Modèle décrit des liaisons permanentes (Papeete→Moorea existe toujours), pas des créneaux datés (ferry du 5 août à 14h) |
-| Raison de la complétion | N/A | Bora Bora est complet (sold:60 = seats:60) sans qu'une seule réservation n'ait eu lieu — artefact de donnée |
-| `isFull` (signal) | Calculable, non exposée | Client calcule `seatsLeft === 0` ; pas de champ `isFull` dans la réponse |
+### Aucune intégration sortante
+Pas d'appel HTTP vers un système externe, pas de connexion à une base de données, pas d'envoi de messages.
 
 ---
 
-## Workflow de test
+## Hypothèses non confirmées
 
-**Nom** : `Exécution de la suite de tests unitaires`  
-**Type** : Technical flow  
-**Criticité** : Basse (3 tests de logique pure, aucune couverture HTTP)  
-**Confiance** : High
+### `isFull` exportée mais non câblée
+La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
+- Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
+- Bloquer une réservation si le transfert est plein (endpoint `POST /bookings` pas encore implémenté)
+- Indicateur UI côté frontend (champ `isFull` dans la réponse)
 
-### Déroulement
+Aucune décision documentée.
 
-1. Développeur exécute `npm test` (script `package.json`).
-2. Node.js lance `node --test test/` (runner natif Node ≥ 18, sans dépendance externe).
-3. Trois tests s'exécutent (`test/transfers.test.js:5-16`) :
-   - **Test 1** : `seatsLeft({ seats: 40, sold: 12 }) === 28` ✓
-   - **Test 2** : `isFull({ seats: 60, sold: 60 }) === true` ✓ et `isFull({ seats: 40, sold: 12 }) === false` ✓
-   - **Test 3** : `listTransfers().length === 3` ✓
-4. Sortie : code `0` (succès) ou `≠ 0` (échec).
+### Fixture transfert plein
+Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:10` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
 
-**Couverture** : Tests logique métier pure uniquement (fonctions `seatsLeft`, `isFull`, `listTransfers`). **Aucun test de la route HTTP** (`GET /transfers`) — aucune couverture du routage, de la sérialisation JSON, ou de la réponse.
+### Synchronisation `sold` depuis un système externe
+Le champ `sold` existe mais est jamais incrémenté. Deux scénarios possibles :
+1. Un endpoint de réservation (`POST /bookings`) sera implémenté plus tard dans ce service, incrémentant `sold` en mémoire.
+2. `sold` sera synchronisé depuis un système externe (backoffice, PMS, API tierce) via un background job ou une API push.
 
----
-
-## Périmètre délimité (hors scope)
-
-### Absences intentionnelles (pilote)
-
-- **Réservation** : Aucune route POST pour créer une réservation. Aucun mécanisme de prise de place.
-- **Annulation** : Aucune route DELETE pour annuler une réservation.
-- **Modification du stock** : `sold` ne peut jamais être incrémenté par une route.
-- **Authentification** : Aucun contrôle d'accès. L'API est ouverte.
-- **Pagination / filtrage** : Retour toujours les 3 transferts, aucun argument de query accepté.
-- **Persistance** : Données en mémoire, perdues au redémarrage.
-
-### Signaux de clarification
-
-Ces absences sont **volontaires** (état de pilote SHIFT/Paperclip) et **documentées**. Elles ne sont pas des bugs, mais des frontières qu'il faut accepter — et clarifier avant d'évoluer.
+Aucun code ne préfigure l'un ou l'autre.
 
 ---
 
-## Hypothèses et questions ouvertes
+## Zones de non-clarté et questions ouvertes
 
-| Question | Impact | Preuve / Source |
-|----------|--------|-----------------|
-| **Devise exacte** : XPF ou autre ? | Client doit afficher le prix correctement | `src/transfers.js:3-7` (entier brut sans unité) |
-| **Bora Bora complet intentionnel ?** | Confusion lors de tests produit si artefact non documenté | `src/transfers.js:5` (sold:60 = seats:60) |
-| **`isFull()` destinée à quoi ?** | Clarifier avant d'ajouter une route de filtrage | Fonction exportée/testée mais morte côté HTTP |
-| **Réservation dans `shift-pilot-resa-web` ?** | Comprendre la division du travail entre dépôts | `README.md:3-4` (désigne resa-web comme consommateur) |
-| **Infrastructure de déploiement ?** | Savoir comment lancer le serveur en production | Aucune Dockerfile, aucun `Procfile` trouvés |
+1. **Validation des données** : si `sold > seats` (survente), `seatsLeft` retourne un nombre négatif sans erreur. Faut-il valider l'invariant ? Où (à l'écriture, à la lecture, jamais) ?
+
+2. **Disponibilité temps réel** : la documentation parle de « disponibilité en temps réel », mais `sold` est statique. Avant production, qui est responsable de maintenir `sold` à jour ?
+
+3. **CORS** : aucun header `Access-Control-Allow-Origin` n'est posé. Le frontend `shift-pilot-resa-web` sera-t-il co-localisé sur la même origine (proxy) ou sur une origine différente ?
+
+4. **Démarrage du service** : `package.json` ne définit pas de script `start` (seulement `test`). Comment le service est-il lancé en développement et en production ?
+
+5. **Port** : le port 3100 est hardcodé dans le code (`server.js:26`). Peut-il être surchargé via `PORT` env var (oui, le code le supporte) — est-ce documenté ?
 
 ---
 
-## Recommandations pour l'évolution
+## Barre de qualité et confiance
 
-1. **Avant d'ajouter une route d'écriture** (POST /reservations) :
-   - Implémenter une validation : `sold <= seats`, `price >= 0`.
-   - Protéger le tableau `transfers` contre la mutation directe (retourner une copie dans `listTransfers()`).
-   - Introduire une couche de routage (Map ou switch) pour éviter l'accumulation de logique dans le callback `createServer`.
+- **Fonctionnalité implémentée** (`GET /transfers`) : correct, cohérent avec les workflows.
+- **Séparation des responsabilités** : claire et propre (transport vs. domaine).
+- **Couverture de test** : partielle. Fonctions pures testées, serveur HTTP non testé.
+- **Risques** : crash sur URL malformée, absence CORS, références mutables exposées (voir audits).
+- **Matériel d'onboarding** : workflows et audits complets et cohérents avec le code.
 
-2. **Clarifier le statut de `isFull`** :
-   - Soit l'exposer dans la réponse : `isFull: seatsLeft === 0`.
-   - Soit implémenter un filtre : `GET /transfers?available=true`.
-   - Soit la retirer si elle n'a aucun usage prévu.
-
-3. **Documenter la devise** : ajouter `currency: "XPF"` dans chaque réponse ou dans le README.
-
-4. **Réévaluer `sold` de Bora Bora** : passer à `sold: 45` (exemple) pour que la démonstration montre un transfert partiellement rempli plutôt que systématiquement complet.
-
+**Résultat** : implémentation fiable pour la consultation publique, incomplet pour une API opérationnelle de réservation.
