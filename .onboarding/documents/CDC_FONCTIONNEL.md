@@ -6,7 +6,10 @@ Cahier des charges fonctionnel. Décrit ce que le logiciel fait, pour qui, selon
 
 ## Contexte métier
 
-Service de consultation de transferts inter-îles en Polynésie française. L'objectif : permettre aux clients (via l'application frontend `shift-pilot-resa-web`) de découvrir les trajets disponibles et leur disponibilité instantanée avant de réserver. Le système ne traite actuellement pas la réservation elle-même.
+Service de consultation et réservation de transferts inter-îles en Polynésie française. L'objectif : permettre aux clients (via l'application frontend `shift-pilot-resa-web`) de :
+1. Découvrir les trajets disponibles et leur disponibilité instantanée
+2. Réserver des sièges sur un trajet (et recevoir un identifiant de réservation)
+3. Annuler une réservation précédemment effectuée
 
 Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions d'accès (catalogue public).
 
@@ -23,8 +26,8 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 - **Non-capacité** : persistance, authentification, business logic complexe.
 
 ### Module de logique métier (`src/transfers.js`)
-- **Capacité** : fournir primitives de calcul (`seatsLeft`, `isFull`) et accès au catalogue (`listTransfers`).
-- **Constraints** : fonctions pures, déterministes, sans I/O.
+- **Capacité** : fournir primitives de calcul (`seatsLeft`, `isFull`), accès au catalogue (`listTransfers`), réservation (`bookSeats`), et annulation (`cancelReservation`).
+- **Constraints** : fonctions (quasi-)pures, déterministes, sans I/O. Side-effect limité à mutations en mémoire (`transfer.sold`, registre `reservations`).
 
 ---
 
@@ -124,17 +127,17 @@ L'endpoint est public. N'importe quel client HTTP peut l'appeler. Pas de vérifi
 
 ## Cas de non-fonctionnement (hors périmètre)
 
-### Réservation d'une place
-Inexistant. Aucun endpoint `POST`, `PUT`, `PATCH` ni `DELETE` n'existe. Le champ `sold` ne peut pas être incrémenté via l'API.
-
 ### Modification du catalogue
-Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:3`) réinitialisée à chaque démarrage du serveur.
+Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5`) réinitialisée à chaque démarrage du serveur.
 
 ### Persistance de réservations
-Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées.
+Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
 Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
+
+### Modification d'une réservation
+Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
 
 ---
 
@@ -174,22 +177,20 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 ## Hypothèses non confirmées
 
 ### `isFull` exportée mais non câblée
-La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
+La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21-23`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
 - Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
-- Bloquer une réservation si le transfert est plein (endpoint `POST /bookings` pas encore implémenté)
 - Indicateur UI côté frontend (champ `isFull` dans la réponse)
 
 Aucune décision documentée.
 
 ### Fixture transfert plein
-Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:10` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
+Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
+
+### Validation de seats dans POST /reserve
+Le serveur valide que `seats` est un entier positif (ligne 37-39) et rejette avec 400 si non. C'est une validation côté HTTP, doublée par une validation symétrique dans `bookSeats()` (ligne 26). Stratégie prudente pour un pilote, mais en production une validation unique (soit HTTP, soit métier) suffirait.
 
 ### Synchronisation `sold` depuis un système externe
-Le champ `sold` existe mais est jamais incrémenté. Deux scénarios possibles :
-1. Un endpoint de réservation (`POST /bookings`) sera implémenté plus tard dans ce service, incrémentant `sold` en mémoire.
-2. `sold` sera synchronisé depuis un système externe (backoffice, PMS, API tierce) via un background job ou une API push.
-
-Aucun code ne préfigure l'un ou l'autre.
+Le champ `sold` est maintenant incrémenté par `bookSeats()` et décrémenté par `cancelReservation()`, mais jamais chargé depuis un système externe au démarrage. En cas de redémarrage, on revient aux valeurs hardcodées. Aucun mécanisme de chargement/synchronisation asynchrone (backoffice, PMS, base de données) n'existe.
 
 ---
 

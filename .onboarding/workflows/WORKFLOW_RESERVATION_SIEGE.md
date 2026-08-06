@@ -2,13 +2,14 @@
 
 ## Classification
 - **Type** : `api_flow`
-- **Sous-type** : écriture avec mutation d'état, avec retour du résultat immédiat
+- **Sous-type** : écriture avec mutation d'état, avec retour du résultat immédiat (UUID de réservation)
 - **Visibilité** : `external_user` — consommé par un frontend web exposé à l'utilisateur final
 - **Acteur principal** : Frontend Web (`shift-pilot-resa-web`, dépôt séparé)
 - **Acteurs** : Frontend Web (consommateur HTTP) · API Backend (`shift-pilot-resa-api`, ce dépôt)
-- **Criticité** : Haute — seul chemin d'écriture du service ; c'est le cœur fonctionnel de la promesse « resa » du produit
+- **Criticité** : Haute — seul chemin de prise d'une réservation ; c'est le cœur fonctionnel de la promesse « resa » du produit
 - **Confiance** : high
-- **Justification** : Le code source est intégralement lu (`src/server.js:23-42`, `src/transfers.js:21-27`) et couvert par 3 tests d'intégration HTTP (`test/server.test.js:34-52`). Toutes les affirmations sont `VÉRIFIÉ_CODE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
+- **Justification** : Le code source est intégralement lu (`src/server.js:23-45`, `src/transfers.js:25-34`) et couvert par 3 tests d'intégration HTTP. Toutes les affirmations sont `VÉRIFIÉ_CODE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
+- **Follow-up** : Voir WORKFLOW_ANNULATION_SIEGE.md pour l'annulation d'une réservation
 
 ## Objectif
 
@@ -24,6 +25,7 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
 
 - `POST /transfers/:id/reserve` — `src/server.js:23-24` (regex `/^\/transfers\/(\d+)\/reserve$/`, méthode POST)
 - Paramètre d'URL `:id` : entier capturé par `(\d+)`, parsé avec `parseInt(..., 10)` (`src/server.js:25`)
+- Corps JSON optionnel : `{ seats?: number }` (défaut 1)
 
 ## Étapes principales
 
@@ -33,31 +35,42 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
 4. L'ID est extrait et converti : `parseInt(reserveMatch[1], 10)` (`src/server.js:25`).
 5. Le corps HTTP est accumulé chunk par chunk : `req.on("data", chunk => body += chunk)` (`src/server.js:27-28`).
 6. À la fin du corps (`req.on("end", ...)`), le JSON est parsé avec `body ? JSON.parse(body) : {}` enveloppé dans un `try/catch` — un corps vide ou malformé produit `seats = undefined` sans erreur visible (`src/server.js:28-35`).
-7. `bookSeats(id, seats ?? 1)` est appelé : si `seats` est `undefined` (corps absent ou malformé), le défaut 1 est appliqué via `??` (`src/server.js:36`).
-8. Dans `bookSeats(transferId, seats=1)` :
-   - Recherche `transfers.find(t => t.id === transferId)` (`src/transfers.js:22`).
-   - Si non trouvé : retourne `{ ok: false, reason: "not_found" }` (`src/transfers.js:23`).
-   - Si `seatsLeft(transfer) < seats` : retourne `{ ok: false, reason: "full" }` (`src/transfers.js:24`).
-   - Sinon : **mute** `transfer.sold += seats` et retourne `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`src/transfers.js:25-26`).
-9. Mappage résultat → réponse HTTP (`src/server.js:37-39`) :
+7. Le serveur valide que `seats` est un entier positif (ligne 37-39), rejette avec 400 si invalid.
+8. `bookSeats(id, seatsValue)` est appelé (`src/server.js:40`).
+9. Dans `bookSeats(transferId, seats)` (`src/transfers.js:25-34`) :
+   - Valide que `seats > 0` et `Number.isInteger(seats)` (ligne 26)
+   - Si invalid : retourne `{ ok: false, reason: "invalid_seats" }`
+   - Recherche `transfers.find(t => t.id === transferId)` (ligne 27)
+   - Si non trouvé : retourne `{ ok: false, reason: "not_found" }`
+   - Calcule `seatsLeft(transfer)` et teste (ligne 29)
+   - Si `seatsLeft < seats` : retourne `{ ok: false, reason: "full" }`
+   - Sinon : **mute** `transfer.sold += seats` (ligne 30)
+   - Génère `reservationId = randomUUID()` (ligne 31)
+   - Enregistre `reservations.set(reservationId, { transferId, seats })` (ligne 32)
+   - Retourne `{ ok: true, reservationId, seatsLeft: seatsLeft(transfer) }` (ligne 33)
+10. Mappage résultat → réponse HTTP (`src/server.js:41-43`) :
+   - `reason: "invalid_seats"` → `sendJson(res, 400, { error: "seats must be a positive integer" })`
    - `reason: "not_found"` → `sendJson(res, 404, { error: "Transfer not found" })`
    - `reason: "full"` → `sendJson(res, 409, { error: "Transfer full" })`
-   - `ok: true` → `sendJson(res, 200, { transferId: id, seatsLeft: result.seatsLeft })`
+   - `ok: true` → `sendJson(res, 200, { reservationId: result.reservationId, transferId: id, seatsLeft: result.seatsLeft })`
 
 ## Règles métier
 
-- **Défaut `seats = 1`** : si le corps est absent, vide, malformé ou si `seats` n'est pas dans le JSON, on réserve 1 siège via `seats ?? 1` (`src/server.js:36`). Le paramètre `seats` dans la signature de `bookSeats` a aussi un défaut `= 1` (`src/transfers.js:21`), mais c'est le `??` de l'appelant qui s'applique en premier.
-- **Garde de capacité** : `seatsLeft(transfer) < seats` → rejet 409 (`src/transfers.js:24`). La condition est stricte (`<`), donc réserver exactement les places restantes est accepté (`seatsLeft === seats` passe).
-- **Existence du transfert** : si `transfers.find()` retourne `undefined`, le transfert n'existe pas → rejet 404 (`src/transfers.js:22-23`).
-- **Mutation immédiate et synchrone** : `transfer.sold += seats` est exécuté dans le même tick — aucun délai, aucune confirmation différée (`src/transfers.js:25`).
-- **Absence de validation sur `seats ≤ 0`** : aucun garde sur la valeur de `seats`. Une valeur `seats=0` passe la garde (`seatsLeft >= 0` est toujours vrai) et retourne 200 sans muter `sold`. Une valeur **négative** passe aussi (`seatsLeft < -N` est toujours faux pour N>0) et décrémente `sold` (`transfer.sold += -N`), augmentant le stock disponible au-delà de la capacité initiale. Ni `src/server.js` ni `src/transfers.js` n'ont de validation `seats > 0`.
-- **Corps JSON malformé silencieusement ignoré** : le `try/catch` de `src/server.js:30-35` avale toute exception de parsing ; `seats` prend `undefined`, puis le `??` applique 1. L'erreur n'est ni loguée ni remontée au client.
+- **Validation stricte de `seats`** : `seats` doit être un entier positif (`Number.isInteger(seats) && seats >= 1`), sinon rejet 400 (`src/server.js:37-39` et `src/transfers.js:26`). Validation dupliquée (prototypage).
+- **Garde de capacité** : `seatsLeft(transfer) < seats` → rejet 409 (`src/transfers.js:29`). La condition est stricte (`<`), donc réserver exactement les places restantes est accepté (`seatsLeft === seats` passe).
+- **Existence du transfert** : si `transfers.find()` retourne `undefined`, le transfert n'existe pas → rejet 404 (`src/transfers.js:27-28`).
+- **Génération UUID** : chaque réservation acceptée génère un UUID unique via `crypto.randomUUID()` (ligne 31). L'UUID est retourné au client et stocké dans le registre.
+- **Mutation immédiate et synchrone** : `transfer.sold += seats` et `reservations.set(...)` s'exécutent dans le même tick — aucun délai, aucune confirmation différée (`src/transfers.js:30-32`).
+- **Mutation réversible** : le registre `reservations` permet une annulation ultérieure via `cancelReservation()` en retrouvant les seats à libérer. Voir WORKFLOW_ANNULATION_SIEGE.md.
+- **Corps JSON malformé retourne 400** : si le corps JSON ne parse pas ou `seats` n'est pas un entier positif, le serveur retourne 400 (ligne 37-39), pas une valeur par défaut silencieuse.
 
 ## Données
 
-- **`transfer.sold`** : seul champ muté dans tout le service (`src/transfers.js:25`). Incrémenté de `seats` à chaque réservation acceptée. Réinitialisé aux valeurs codées en dur au redémarrage du process.
-- **Entrée** : `{ seats?: number }` dans le corps JSON (optionnel, défaut 1)
-- **Réponse 200** : `{ transferId: number, seatsLeft: number }`
+- **`transfer.sold`** : champ muté lors de réservation (`src/transfers.js:30`), restauré lors d'annulation. Réinitialisé aux valeurs codées en dur au redémarrage du process.
+- **`reservations` Map** : registre en mémoire `reservationId (UUID) → { transferId, seats }` (`src/transfers.js:11`). Peuplée par `bookSeats()`, purgée par `cancelReservation()`.
+- **Entrée** : `{ seats?: number }` dans le corps JSON (optionnel)
+- **Réponse 200** : `{ reservationId: string (UUID), transferId: number, seatsLeft: number }` [UPDATED]
+- **Réponse 400** : `{ error: "seats must be a positive integer" }` [NEW]
 - **Réponse 404** : `{ error: "Transfer not found" }`
 - **Réponse 409** : `{ error: "Transfer full" }`
 
@@ -75,18 +88,16 @@ Aucune intégration externe explicite visible. Toute la logique est in-process e
 
 ## Questions ouvertes
 
-- La valeur `seats` reçue doit-elle être rejetée si elle est ≤ 0 ? Le comportement actuel (accepter `seats=0`, accepter les valeurs négatives) est-il intentionnel ou un oubli ?
-- Le corps JSON malformé doit-il retourner 400 plutôt que silencieusement tomber sur `seats=1` ? (`src/server.js:33-35`)
 - La race condition est-elle un risque accepté si un déploiement multi-process (cluster Node.js, conteneurs multiples) est envisagé ? En process unique, aucun interleaving n'est possible ; mais si plusieurs workers accèdent au même état, un mécanisme d'exclusion mutuelle (verrou applicatif, opération atomique, base de données partagée) sera nécessaire.
-- Aucun endpoint d'annulation n'existe (`DELETE` ou `POST /cancel`). Est-il prévu ?
-- Le frontend `shift-pilot-resa-web` appelle-t-il déjà cette route ou est-elle encore en attente d'intégration côté web ?
+- Comment le frontend `shift-pilot-resa-web` stocke-t-il l'UUID `reservationId` retourné ? En session client ? En localStorage ? En état applicatif ?
+- Pourquoi la validation `seats > 0` est-elle dupliquée (serveur + transfers.js) ? Une validation unique suffirait en production.
 
 ## Preuves
 
-- `src/server.js:23-41` — routage POST, parsing ID, accumulation corps, parse JSON (try/catch), appel `bookSeats`, mappage résultats → statuts HTTP
-- `src/transfers.js:21-27` — `bookSeats()` : recherche, gardes, mutation `transfer.sold`, retour
-- `src/transfers.js:13-15` — `seatsLeft(transfer)` (utilisé dans `bookSeats`)
-- `src/transfers.js:3-7` — tableau `transfers` (état muté)
-- `test/server.test.js:34-39` — test 200 : POST /transfers/1/reserve → seatsLeft=27
-- `test/server.test.js:42-46` — test 409 : POST /transfers/2/reserve (complet) → "Transfer full"
-- `test/server.test.js:48-52` — test 404 : POST /transfers/999/reserve (inexistant) → "Transfer not found"
+- `src/server.js:23-45` — routage POST, validation ID, parsing JSON, validation seats, appel `bookSeats`, mappage résultats → statuts HTTP
+- `src/transfers.js:25-34` — `bookSeats()` : validation, recherche, gardes, mutation `transfer.sold`, génération UUID, enregistrement Map, retour
+- `src/transfers.js:11` — `reservations` Map (registre de suivi)
+- `src/transfers.js:17-19` — `seatsLeft(transfer)` (utilisé dans `bookSeats`)
+- `src/transfers.js:5-9` — tableau `transfers` (état muté)
+- `test/server.test.js` — tests POST /transfers/:id/reserve (200/400/404/409)
+- `test/transfers.test.js` — tests unitaires `bookSeats()`
