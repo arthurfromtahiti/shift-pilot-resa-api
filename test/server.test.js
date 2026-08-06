@@ -50,3 +50,21 @@ test("POST /transfers/999/reserve (inexistant) → 404", async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.error, "Transfer not found");
 });
+
+test("POST /transfers/3/reserve seats=0 → 400", async () => {
+  const res = await postJson("/transfers/3/reserve", { seats: 0 });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "seats must be a positive integer");
+});
+
+test("POST /transfers/3/reserve seats=-1 → 400", async () => {
+  const res = await postJson("/transfers/3/reserve", { seats: -1 });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "seats must be a positive integer");
+});
+
+test("POST /transfers/3/reserve seats=1.5 (non-entier) → 400", async () => {
+  const res = await postJson("/transfers/3/reserve", { seats: 1.5 });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "seats must be a positive integer");
+});
