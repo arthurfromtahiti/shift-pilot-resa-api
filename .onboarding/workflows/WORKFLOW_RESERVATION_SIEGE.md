@@ -49,7 +49,6 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
    - Enregistre `reservations.set(reservationId, { transferId, seats })` (ligne 32)
    - Retourne `{ ok: true, reservationId, seatsLeft: seatsLeft(transfer) }` (ligne 33)
 10. Mappage résultat → réponse HTTP (`src/server.js:41-43`) :
-   - `reason: "invalid_seats"` → `sendJson(res, 400, { error: "seats must be a positive integer" })`
    - `reason: "not_found"` → `sendJson(res, 404, { error: "Transfer not found" })`
    - `reason: "full"` → `sendJson(res, 409, { error: "Transfer full" })`
    - `ok: true` → `sendJson(res, 200, { reservationId: result.reservationId, transferId: id, seatsLeft: result.seatsLeft })`
@@ -80,10 +79,9 @@ Aucune intégration externe explicite visible. Toute la logique est in-process e
 
 ## Risques
 
-- **Race condition sur le dernier siège** (`HYPOTHÈSE — mode cluster uniquement`) : dans la configuration actuelle (process Node.js unique), la garde `seatsLeft(transfer) < seats` et la mutation `transfer.sold += seats` sont exécutées de manière **synchrone** dans le même callback `req.on("end", ...)`, sans `await` ni I/O entre elles (`src/server.js:28-39`, `src/transfers.js:21-27`). Le modèle single-threaded de Node.js garantit qu'aucun autre callback ne peut s'intercaler entre la garde et la mutation : la race condition est **impossible en process unique**. Elle deviendrait réelle uniquement en mode cluster Node.js (plusieurs workers partageant un état commun), qui n'est ni configuré ni documenté dans ce dépôt.
-- **Perte totale de données au redémarrage** (`VÉRIFIÉ_CODE`) : `transfer.sold` est in-memory (`src/transfers.js:3-7`). Un redémarrage du process réinitialise le catalogue à ses valeurs codées en dur. Aucune persistance sur disque ni base de données.
+- **Race condition sur le dernier siège** (`HYPOTHÈSE — mode cluster uniquement`) : dans la configuration actuelle (process Node.js unique), la garde `seatsLeft(transfer) < seats` et la mutation `transfer.sold += seats` sont exécutées de manière **synchrone** dans le même callback `req.on("end", ...)`, sans `await` ni I/O entre elles (`src/server.js:28-39`, `src/transfers.js:25-34`). Le modèle single-threaded de Node.js garantit qu'aucun autre callback ne peut s'intercaler entre la garde et la mutation : la race condition est **impossible en process unique**. Elle deviendrait réelle uniquement en mode cluster Node.js (plusieurs workers partageant un état commun), qui n'est ni configuré ni documenté dans ce dépôt.
+- **Perte totale de données au redémarrage** (`VÉRIFIÉ_CODE`) : `transfer.sold` est in-memory (`src/transfers.js:5-9`). Un redémarrage du process réinitialise le catalogue à ses valeurs codées en dur. Aucune persistance sur disque ni base de données.
 - **Pas d'authentification** : n'importe quel appelant HTTP peut réserver des sièges, potentiellement autant de fois qu'il veut, sans identité ni quota. La contrainte est uniquement la capacité totale du transfert.
-- **Valeur `seats` négative ou nulle non rejetée** (`VÉRIFIÉ_CODE`) : `bookSeats(id, -5)` passe la garde `seatsLeft < -5` (toujours faux) et applique `transfer.sold += -5`, augmentant le stock fictif au-delà de la capacité initiale (`src/transfers.js:24-25`). `bookSeats(id, 0)` réussit sans muter l'état. Aucune validation de borne inférieure dans `src/server.js` ni dans `src/transfers.js`.
 - **Absence de notification asynchrone** : la réservation est confirmée par la réponse 200, mais aucun mail, SMS ou webhook n'est déclenché. L'utilisateur final ne reçoit aucune confirmation hors de l'interface web.
 
 ## Questions ouvertes
