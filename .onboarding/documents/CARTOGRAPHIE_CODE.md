@@ -16,9 +16,9 @@ shift-pilot-resa-api/
 ├── documents/
 │   └── ECOSYSTEME.md   ← Dépendances avec frontend
 └── .onboarding/        ← Artefacts de documentation (this folder)
-    ├── CARTE_DOMAINE.md
-    ├── WORKFLOWS.md
-    └── CARTOGRAPHIE_CODE.md (this file)
+    ├── domaines/CARTE_DES_DOMAINES.md
+    ├── workflows/WORKFLOW_*.md
+    └── documents/CARTOGRAPHIE_CODE.md (this file)
 ```
 
 ---
@@ -186,7 +186,7 @@ const transfers = [
 // Imports
 const http = require("node:http");
 const { URL } = require("node:url");
-const { listTransfers, seatsLeft, bookSeats } = require("./transfers");  // [UPDATED]
+const { listTransfers, seatsLeft, bookSeats, cancelReservation } = require("./transfers");  // [UPDATED]
 
 // Helper
 function sendJson(res, status, body) { ... }  // Ligne 5-8
@@ -220,7 +220,7 @@ function sendJson(res, status, body) {
 - **Entrée** : réponse HTTP, statut, objet JS
 - **Sortie** : écrit en réponse HTTP
 - **Rôle** : factoriser Content-Type + sérialisation JSON
-- **Usage** : appelée 6x (GET 200 ligne 14, POST 200 ligne 43, POST 404/409 ligne 41-42, DELETE 200/404 ligne 52-53, catch-all 404 ligne 56)
+- **Usage** : appelée 8x (GET 200 ligne 14, POST 400 ligne 38, POST 404 ligne 41, POST 409 ligne 42, POST 200 ligne 43, DELETE 404 ligne 52, DELETE 200 ligne 53, catch-all 404 ligne 56)
 
 #### Route : GET /transfers — Ligne 13-21
 ```javascript

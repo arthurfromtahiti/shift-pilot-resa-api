@@ -146,7 +146,7 @@ Représente un trajet régulier entre deux îles, avec capacité et ventes enreg
 | `from` | chaîne | ville/île de départ | `"Papeete"` |
 | `to` | chaîne | ville/île de destination | `"Moorea"` |
 | `seats` | entier | capacité totale du trajet (places disponibles au démarrage) | `40, 60, 20` |
-| `sold` | entier | places vendues (hardcodé, jamais incrémenté dans le code source actuel) | `12, 60, 5` |
+| `sold` | entier | places vendues ; incrémenté par `bookSeats()`, décrémenté par `cancelReservation()` | `12, 60, 5` |
 | `price` | entier | prix unitaire en XPF (francs CFP polynésiens) | `3500, 21000, 1800` |
 
 Schéma implicite (pas de TypeScript, pas de validation de schéma au runtime).
@@ -178,7 +178,7 @@ Représente un immobilisation de N sièges sur un transfert, associée à un UUI
 2. Durée de vie : jusqu'à annulation ou redémarrage du process (volatilité).
 3. Suppression : `cancelReservation()` supprime l'entrée de la Map (`transfers.js:41`).
 
-**Réflexe de mutation** : chaque création de réservation décrémente `transfer.sold` du transfert associé ; chaque annulation le restaure.
+**Réflexe de mutation** : chaque création de réservation incrémente `transfer.sold` du transfert associé ; chaque annulation le décrémente (le restaure à sa valeur pré-réservation).
 
 ---
 

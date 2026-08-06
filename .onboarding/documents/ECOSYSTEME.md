@@ -165,26 +165,10 @@ Transfer {
 - Traiter aussi les requêtes OPTIONS (preflight) si HEAD ou headers personnalisés ajoutés à l'avenir
 - Tester en intégration avec frontend sur port différent avant livraison
 
-### Risque 3 : Validation manquante sur `seats` (CRITIQUE POUR DONNÉES)
+### Risque 3 : Validation manquante sur `seats` (RÉSOLU — SHIAAAAAAAAAAAAAAAAAAAAAAAA-328)
 
-**Le problème** :
-- API accepte `seats` négatif, zéro ou absent dans POST /transfers/:id/reserve
-- Pas de vérification `Number.isInteger(seats) && seats >= 1`
-- Valeur par défaut silencieuse (`undefined → 1`) masque bugs clients
-
-**Preuve** :
-- Implémentation : `src/server.js:32` extrait `parsed.seats` sans validation
-- Fallback : `const seats = parsed.seats ?? 1` (nullish coalescing, `src/server.js:36`)
-- Risque : `POST /transfers/1/reserve body={"seats":-5}` décrémente le stock (inversé)
-
-**Impact** :
-- Stock peut descendre sous zéro (violation invariant)
-- Client mal écrit envoyant `-5` crée un overbooking caché
-- Chaîne d'intégration ne détecte le bug que si test avec valeurs négatives explicites
-
-**Recommandation** :
-- Valider et rejeter 400 si `seats` n'est pas un entier ≥ 1
-- Ajouter test de régression `POST /transfers/1/reserve body={"seats":-1}` attendant 400
+**Statut** : ✓ RÉSOLU — implémenté depuis SHIA-328  
+Validation `Number.isInteger(seats) && seats >= 1` est présente en `src/server.js:37-39` avec rejet 400 si invalide. Tests couverts (`test/transfers.test.js`). Aucune action requise.
 
 ### Risque 4 : Formulaire réservation absent du frontend (FONCTIONNEL)
 
@@ -293,7 +277,7 @@ Avant de déclarer le flux end-to-end fonctionnel :
 
 - [ ] **API GET /transfers retourne champ `availableSeats` (harmonisé nom)**
 - [ ] **API GET /transfers inclut header `Access-Control-Allow-Origin`**
-- [ ] **API POST /transfers/:id/reserve valide `seats >= 1` et rejette 400 si invalide**
+- [x] **API POST /transfers/:id/reserve valide `seats >= 1` et rejette 400 si invalide**
 - [ ] **Frontend récupère et affiche les 4 champs sans `undefined`**
 - [ ] **Test d'intégration** : appel GET depuis navigateur sur port différent, validate réponse, affichage OK
 - [ ] **Formulaire réservation implémenté** ou issue de suivi créée avec priorité documentée
