@@ -1,6 +1,6 @@
 const http = require("node:http");
 const { URL } = require("node:url");
-const { listTransfers, seatsLeft, bookSeats } = require("./transfers");
+const { listTransfers, seatsLeft, bookSeats, cancelReservation } = require("./transfers");
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -40,9 +40,17 @@ const server = http.createServer((req, res) => {
       const result = bookSeats(id, seatsValue);
       if (result.reason === "not_found") return sendJson(res, 404, { error: "Transfer not found" });
       if (result.reason === "full") return sendJson(res, 409, { error: "Transfer full" });
-      return sendJson(res, 200, { transferId: id, seatsLeft: result.seatsLeft });
+      return sendJson(res, 200, { reservationId: result.reservationId, transferId: id, seatsLeft: result.seatsLeft });
     });
     return;
+  }
+
+  const cancelMatch = url.pathname.match(/^\/transfers\/(\d+)\/reservations\/([^/]+)$/);
+  if (cancelMatch && req.method === "DELETE") {
+    const reservationId = cancelMatch[2];
+    const result = cancelReservation(reservationId);
+    if (!result.ok) return sendJson(res, 404, { error: "Reservation not found" });
+    return sendJson(res, 200, { seatsLeft: result.seatsLeft });
   }
 
   sendJson(res, 404, { error: "Not found" });
