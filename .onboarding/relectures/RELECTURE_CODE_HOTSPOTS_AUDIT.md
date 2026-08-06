@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Les trois hotspots identifiés sont réels, sourcés à la ligne, et correctement hiérarchisés. La complexité cyclomatique est évaluée correctement. Le lien avec les workflows documentés est pertinent et vérifiable.
+**Bon** — Les points chauds identifiés sont exacts et bien sourcés. Les statuts de preuve sont correctement appliqués. L'audit ne reproduit pas l'erreur de qualification de la race condition présente dans SECURITY_ROBUSTNESS_AUDIT : il se contente de la mentionner comme référence à un autre audit ("race condition possible, borne inférieure non protégée") sans lui attribuer un statut `VÉRIFIÉ_CODE` ici.
 
 ## Problèmes bloquants
 
@@ -10,19 +10,15 @@ Aucun.
 
 ## Problèmes mineurs
 
-**Légère incohérence de décompte** — L'audit annonce « 3 fichiers source » dans le résumé global, alors que `ARCHITECTURE_AUDIT.md` parle de « 2 fichiers source ». La différence tient à l'inclusion ou non du fichier de test (`test/transfers.test.js`). Les deux formulations sont défendables ; noter qu'elles sont dans deux documents distincts, donc sans impact sur la cohérence interne de chacun. Ce n'est pas un défaut de preuve.
+Aucun.
 
 ## Points vérifiés et corrects
 
-- Hotspot 1 — `src/server.js:11` : `new URL(req.url, ...)` sans `try/catch`, confirmé. Lien correct avec `WORKFLOW_LISTE_TRANSFERTS` (unique workflow HTTP).
-- Hotspot 2 — `src/transfers.js:9-11` : `return transfers` sans copie, confirmé. Lien correct avec `WORKFLOW_CALCUL_DISPONIBILITE`.
-- Hotspot 3 — `isFull` exportée (`src/transfers.js:17-21`) mais absente de `src/server.js:3` — confirmé. Usage uniquement dans `test/transfers.test.js:3` — confirmé.
-- Complexité cyclomatique : `sendJson`, `listTransfers`, `seatsLeft`, `isFull` toutes à 0 branche ; handler HTTP à 1 branche — exact.
-- Absence de code mort au sens strict (tous les exports sont consommés quelque part) — exact, avec la nuance correctement apportée que `isFull` n'est consommée que par le test.
-- `HYPOTHÈSE` correctement posé sur l'intention préparatoire de `isFull` — aucune documentation ne le confirme.
-- Guard `require.main === module` (`src/server.js:27`) — confirmé.
-- Aucun secret.
-
-## Recommandations de correction
-
-Aucune. La légère incohérence de décompte est anecdotique et ne nécessite pas de correction.
+- **Zone POST couplée** (`VÉRIFIÉ_CODE`, `src/server.js:23-42`) : route matching, cast de `id`, collecte async du body, parsing JSON, appel métier, dispatch des réponses — tout dans 20 lignes. Confirmé. ✓
+- **`bookSeats` seule mutation** (`VÉRIFIÉ_CODE`, `src/transfers.js:21-27`) : unique point de mutation de `sold`. ✓
+- **`isFull` dead code en production** (`VÉRIFIÉ_CODE`, `src/transfers.js:17-19`) : exportée mais non importée dans `src/server.js:3` (qui importe `{ listTransfers, seatsLeft, bookSeats }` uniquement). Seule occurrence dans `test/transfers.test.js:9-11`. ✓
+- **Routage sans table de routes** (`VÉRIFIÉ_CODE`, `src/server.js:13` et `23`) : deux blocs `if` indépendants, ordre significatif. ✓
+- **Absence de timeout sur la lecture du body** (`VÉRIFIÉ_CODE`, `src/server.js:26-28`) : `req.on("data")` + `req.on("end")` sans timeout. Vecteur Slowloris confirmé par lecture du code. ✓
+- **Mutation irréversible dans `bookSeats`** (`VÉRIFIÉ_CODE`, `src/transfers.js:25`) : `transfer.sold += seats` sans rollback — correctement qualifié. ✓
+- **Extension de l'API via zone POST** qualifiée `HYPOTHÈSE` (pas encore de troisième endpoint) — calibrage correct. ✓
+- **Aucun secret recopié**. ✓

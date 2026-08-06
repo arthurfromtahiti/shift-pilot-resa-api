@@ -4,74 +4,53 @@
 
 ## Compréhension globale
 
-Avec 3 fichiers source et ~68 lignes de code, la notion de « hotspot » se réduit à quelques loci très précis. Il n'existe pas de fichier gonflé, pas de couplage circulaire, pas de code mort significatif. Les zones à risque sont deux : `src/server.js:11` (URL parsing sans garde), et `src/transfers.js:9-11` (référence mutable exposée). Un troisième point — `isFull` exportée mais non câblée à HTTP — est une bombe à retardement documentaire pour un développeur futur.
+Le codebase est très petit (~80 lignes de code de production, ~70 lignes de tests). Il n'y a pas de fichier volumineux ni de couplage complexe. Les zones à surveiller sont celles qui concentrent à la fois la logique critique et l'absence de protections — dans un si petit projet, les points chauds sont moins des fichiers que des blocs de code précis.
 
 ## Résumé exécutif
 
-La base de code est trop petite pour présenter des hotspots classiques (fichier de 600 lignes, classe God, couplage afférent élevé). Les risques sont concentrés sur deux lignes précises dans deux fichiers. Le risque le plus sévère est `src/server.js:11` : une exception non attrapée dans le handler HTTP peut faire crasher le process sur n'importe quelle requête malformée. Le second risque, `src/transfers.js:9-11`, est latent : `listTransfers()` retourne la référence interne du tableau, ce qui devient un vecteur de corruption silencieuse dès l'ajout d'un endpoint mutable. La fonction `isFull` est exportée sans être consommée par le serveur HTTP — son existence non câblée représente un risque de réimplémentation divergente par un développeur futur.
+Deux fichiers constituent tout le code de production, et un seul d'entre eux (`src/server.js`) porte plusieurs responsabilités entremêlées. Le bloc le plus risqué est la zone de traitement des requêtes POST (`src/server.js:23-42`) : il concentre la validation (absente), le parsing du corps JSON, l'appel métier, et le mappage des réponses HTTP — tout en gérant un callback asynchrone `req.on("end")` au milieu d'une fonction de dispatching synchrone. C'est sur cette zone qu'un bug, un changement de comportement ou une extension future aura le plus d'impact. La fonction `bookSeats` (`src/transfers.js:21-27`) est l'autre point chaud : c'est le seul endroit où l'état global est muté, et la garde de capacité y est à la fois le mécanisme de protection et sa seule implémentation.
 
 ## Constats détaillés
 
-**Hotspot 1 : `src/server.js:11` — parsing URL non gardé**
+**`src/server.js:23-42` — zone de traitement POST, la plus couplée (`VÉRIFIÉ_CODE`)** : en 20 lignes, ce bloc effectue le matching de route (`url.pathname.match`), l'extraction et le cast du paramètre `id`, la collecte asynchrone du corps (`req.on("data")`), le parsing JSON avec fallback silencieux, l'extraction de `seats`, l'appel à `bookSeats`, et le mappage de tous les cas de réponse (200, 404, 409). Ces responsabilités multiples dans un même bloc rendent le code dense — chaque modification (ajouter une validation, changer le fallback, ajouter un nouveau statut HTTP) touche le même endroit et peut dégrader les autres comportements. Le traitement asynchrone (`req.on("end", () => {...})`) est correct mais augmente la profondeur d'imbrication et rend la lecture non linéaire.
 
-`VÉRIFIÉ_CODE` : `const url = new URL(req.url, \`http://${req.headers.host}\`);` est appelé pour chaque requête HTTP entrante, sans bloc `try/catch`. Le constructeur `URL` lève une `TypeError: Invalid URL` lorsque l'URL n'est pas parseable. Exemples déclencheurs : une requête HTTP/0.9 sans chemin, un scan de ports envoyant une ligne de requête non conforme (`CONNECT example.com:443 HTTP/1.1`), ou un payload d'un fuzzer. Cette ligne est la seule dans le codebase où une exception peut échapper au handler — et elle se trouve sur le chemin critique de chaque requête. Le risque est amplifié par l'absence de tout gestionnaire `process.on('uncaughtException')` dans le code source (`src/server.js` relu en entier).
+**`src/transfers.js:21-27` — `bookSeats`, seule mutation d'état global (`VÉRIFIÉ_CODE`)** : cette fonction de 7 lignes est le seul point de mutation de l'état du service. Elle porte à la fois la recherche du transfert, la garde de capacité, la mutation de `transfer.sold`, et la construction de la réponse. C'est une fonction courte et lisible dans son état actuel, mais c'est aussi la cible de la plupart des bugs documentés dans les autres audits : validation de `seats` absente, race condition possible, borne inférieure non protégée. Toute correction de sécurité ou de robustesse passera par ici.
 
-Ce hotspot est directement lié au workflow `LISTE_TRANSFERTS` (l'unique workflow HTTP du service) : tout appel à `GET /transfers` passe par cette ligne. Un crash ici rend le service entièrement indisponible.
+**`isFull` exporté mais mort en production (`VÉRIFIÉ_CODE`)** : `src/transfers.js:17-19` exporte `isFull` qui n'est importée nulle part dans `src/server.js:3` et n'est pas utilisée dans le chemin de réservation. La garde de complétude en production passe par `seatsLeft(transfer) < seats` dans `bookSeats`, pas par `isFull`. `isFull` n'est utilisé que dans `test/transfers.test.js:9-11`. C'est du code mort en production — pas un bug, mais un signal que le design initial prévoyait `isFull` comme garde principale et que l'implémentation a divergé sans nettoyage.
 
-**Hotspot 2 : `src/transfers.js:9-11` — référence mutable retournée**
+**Routage manuel sans table de routes (`VÉRIFIÉ_CODE`)** : `src/server.js:13` et `23` contiennent deux blocs de dispatching (`if (url.pathname === "/transfers" && req.method === "GET")` et `if (reserveMatch && req.method === "POST")`). L'ordre de ces blocs est significatif : la route GET est testée en premier, la route POST en second. Un troisième endpoint introduit un troisième bloc dont l'ordre relatif aux deux premiers doit être choisi consciemment. Il n'existe pas de protection contre les ambiguïtés de pattern.
 
-`VÉRIFIÉ_CODE` : 
-```js
-function listTransfers() {
-  return transfers;  // référence directe au tableau module-level
-}
-```
-L'appelant actuel (`src/server.js:14`) utilise `.map()` sans muter. Mais `listTransfers()` est une API publique du module — tout futur code qui appelle `listTransfers()` et modifie un élément retourné mute l'état global du process. Ce pattern est un vecteur de bugs silencieux : la mutation ne lève pas d'erreur, ne produit pas de log, et se manifeste des requêtes plus tard.
-
-Ce point est central au workflow `CALCUL_DISPONIBILITE` : si `sold` est muté par un chemin indirect (futur endpoint de réservation passant par `listTransfers()`), les calculs de disponibilité deviennent imprévisibles.
-
-**Hotspot 3 : `isFull` — exportée, non consommée côté HTTP**
-
-`VÉRIFIÉ_CODE` : `src/transfers.js:17-21` définit et exporte `isFull`. `src/server.js:3` importe `{ listTransfers, seatsLeft }` — `isFull` en est absent. `isFull` n'est utilisée que dans `test/transfers.test.js:9-12`. `HYPOTHÈSE` : l'export était préparatoire pour un futur endpoint qui filtrerait les transferts complets ou bloquerait une réservation sur un transfert plein. Sans cette connaissance, un développeur ajoutant ce feature pourrait réécrire la règle `seatsLeft(t) === 0` indépendamment, créant une divergence potentielle si la définition de saturation évolue.
-
-**Absence de code mort significatif**
-
-`VÉRIFIÉ_CODE` : revue de tous les exports — `listTransfers`, `seatsLeft`, `isFull` sont les trois exports de `transfers.js`. `listTransfers` et `seatsLeft` sont consommés par `server.js:3`. `isFull` est consommée par le test (`test/transfers.test.js:3`). `server` est exporté par `server.js:30` (consommé par les tests potentiels). Il n'existe pas de code mort inutilisé.
-
-**Complexité cyclomatique**
-
-`VÉRIFIÉ_CODE` : toutes les fonctions sont à complexité 1-2. `sendJson` : 0 branche. `listTransfers` : 0 branche. `seatsLeft` : 0 branche. `isFull` : 0 branche. Le handler HTTP : 1 branche (`if pathname === '/transfers' && method === 'GET'`). Pas de boucles imbriquées, pas de récursion.
+**Absence de timeout sur la lecture du corps de requête (`VÉRIFIÉ_CODE`)** : `src/server.js:26-28` agrège le corps avec `req.on("data")` et attend `req.on("end")`. Un client qui envoie un corps très lentement (ou ne le termine jamais) gardera la connexion ouverte indéfiniment — le serveur ne pose pas de timeout. Pour un pilote à usage unique, c'est négligeable ; pour un service exposé, c'est un vecteur de Slowloris basique.
 
 ## Forces
 
-- Complexité cyclomatique minimale : toutes les fonctions sont triviales à lire et à tester.
-- Guard `require.main === module` : `src/server.js:27` — architecture testable, pas de side-effect à l'import.
-- Pas de code mort inutile : tous les exports sont consommés quelque part.
+- **Petite taille absolue** : la totalité du code de production tient en 80 lignes sur 2 fichiers — n'importe quel développeur peut lire tout le code en 5 minutes. Le point chaud le plus complexe (`src/server.js:23-42`) reste dans une portée mentale gérable.
+- **`bookSeats` est la seule mutation** : une seule fonction mute l'état, ce qui rend le code raisonnable à auditer et à corriger. Pas de mutation dispersée ou cachée.
+- **Pas de code mort volumineux** : hormis `isFull` (3 lignes), tout le code est utilisé dans un chemin réel.
 
 ## Dettes techniques
 
-- **`src/server.js:11` sans `try/catch`** — vecteur de crash actif sur requête malformée.
-- **`listTransfers()` retourne une référence** (`src/transfers.js:10`) — vecteur de mutation silencieuse.
-- **`isFull` non câblée à HTTP** — risque de réimplémentation divergente dans le futur.
+- **`isFull` exporté et non utilisé en production** : fonction de 3 lignes inutile dans `src/server.js`, présente dans les exports (`src/transfers.js:17-19`, `module.exports` ligne 29). Non dangereuse, mais source de confusion : pourquoi est-elle là si `bookSeats` ne l'appelle pas ?
+- **Zone POST trop dense** (`src/server.js:23-42`) : validation, parsing, logique métier, réponse HTTP — dans un seul bloc. Toute extension (header de réponse, validation supplémentaire) s'y ajoute et augmente la densité.
 
 ## Zones critiques
 
-- `src/server.js:11` — parsing URL : chemin critique de toutes les requêtes, sans protection d'erreur.
-- `src/transfers.js:9-11` — `listTransfers` : API publique exposant l'état interne mutable.
+- **`src/server.js:23-42`** : zone la plus risquée car elle mélange des responsabilités et gère l'asynchrone inline. C'est ici qu'un senior regarderait en premier lors d'un bug de réservation ou d'une extension de l'API.
+- **`src/transfers.js:21-27`** (`bookSeats`) : seule porte de mutation de l'état global. Toute correction de sécurité ou de robustesse passe par cette fonction.
 
 ## Risques
 
-- **Crash de process** sur `src/server.js:11` (URL malformée, hôte manquant) : service entièrement indisponible jusqu'au redémarrage.
-- **Mutation silencieuse de l'état global** via `listTransfers()` (`src/transfers.js:10`) : bugs intermittents difficiles à diagnostiquer si plusieurs endpoints modifient les objets retournés.
-- **Réimplémentation divergente de `isFull`** : si un futur développeur ne voit pas la fonction exportée (`src/transfers.js:17-21`) et réécrit `seatsLeft(t) === 0` localement, deux définitions de saturation coexisteron — un désaccord silencieux.
+- **Extension de l'API via la zone POST** : tout ajout de feature dans la gestion du corps de requête (limite de taille, header `Content-Type`, validation de `seats`) augmente la densité d'un bloc déjà dense. Risque de régression par effet de bord — `HYPOTHÈSE` (pas encore de troisième endpoint, risque potentiel).
+- **Mutation non protégée dans `bookSeats`** : un bug dans la validation de `seats` (déjà documenté en audit sécurité) se concrétise dans la ligne `transfer.sold += seats` (`src/transfers.js:25`) — la mutation est irréversible sans redémarrage du process — `VÉRIFIÉ_CODE`.
+- **Timeout absent sur la lecture du body** : connexion maintenue indéfiniment si un client n'envoie jamais `end` — `VÉRIFIÉ_CODE`, risque minimal en pilote, non négligeable en exposition réseau.
 
 ## Recommandations priorisées
 
-1. **Wrapper `new URL(...)` dans un `try/catch`** avec réponse `400 Bad Request` — `src/server.js:11` — priorité haute, risque actif
-2. **Retourner `[...transfers]` dans `listTransfers()`** — `src/transfers.js:10` — priorité moyenne, risque latent
-3. **Documenter `isFull`** (commentaire ou JSDoc sur l'export) sur son rôle préparatoire — `src/transfers.js:17` — priorité basse, risque documentaire
+1. **Ajouter la validation de `seats` dans `bookSeats` ou avant l'appel** (`src/transfers.js:21` ou `src/server.js:36`) : c'est le correctif le plus urgent, il touche directement le point chaud `bookSeats` — voir audit sécurité, recommandation 1.
+2. **Extraire le parsing du body POST en fonction dédiée** hors de la zone `src/server.js:23-42` : une fonction `parseBody(req)` qui retourne une Promise réduit la profondeur d'imbrication et isole le parsing des autres responsabilités. Priorité : basse (amélioration de lisibilité, pas de bug).
+3. **Supprimer ou intégrer `isFull`** dans la logique de `bookSeats` : soit la supprimer (`src/transfers.js:17-19`) si elle n'a pas de rôle futur planifié, soit l'utiliser explicitement dans `bookSeats` à la place de la comparaison inline. Priorité : basse (code mort sans impact fonctionnel).
 
 ## Questions ouvertes
 
-- Y a-t-il un superviseur de process (PM2, Docker restart policy) qui redémarrerait automatiquement le serveur après un crash ? Sans lui, le service reste down jusqu'à intervention manuelle.
-- `isFull` est-elle prévue pour être câblée à un endpoint existant dans `shift-pilot-resa-web` ou dans un futur endpoint de ce service ?
+- Y a-t-il un plan pour introduire un routeur (`express`, `fastify`) avant l'ajout du troisième endpoint ? Cette décision changerait profondément `src/server.js`.
+- `isFull` est-elle conservée pour une future route `GET /transfers/:id` qui exposerait le statut de disponibilité individuelle ? Si oui, sa présence est intentionnelle et mérite un commentaire.

@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — L'audit des tests est factuel et exhaustif sur ce qui existe. Les gaps (zéro test HTTP, cas limites manquants, `listTransfers` sans vérification de contenu) sont tous exacts. Le constat sur le guard `require.main === module` non exploité est pertinent et vérifiable.
+**Acceptable avec réserves** — Deux imprécisions mineures : numéro de ligne incorrect pour `package.json` et description inexacte du body de T1. Les constats sur la couverture manquante, l'état partagé et les cas limites absents sont tous exacts et bien sourcés. Corrige et resoumets.
 
 ## Problèmes bloquants
 
@@ -10,21 +10,37 @@ Aucun.
 
 ## Problèmes mineurs
 
-Aucun.
+**[MINEUR-1] `package.json (ligne 4)` — numéro de ligne incorrect**
+
+L'audit écrit : « La commande `node --test test/*.test.js` dans `package.json` (ligne 4) ».
+
+Vérification sur `package.json` :
+- Ligne 4 : `"private": true`
+- Ligne 6 : `"scripts": { "test": "node --test test/*.test.js" }`
+
+La commande est à la ligne 6, pas la ligne 4. Correction requise : `package.json:6`.
+
+**[MINEUR-2] T1 décrit comme envoyant un "body vide"**
+
+L'audit dit : « T1 appelle `POST /transfers/1/reserve` avec un body vide (→ `seats = 1` par défaut) ».
+
+Vérification dans `test/server.test.js:34-35` : le test appelle `postJson("/transfers/1/reserve", {})` — `postJson` sérialise le body en `JSON.stringify({})` = `"{}"`. Le body envoyé est donc `{}` (objet JSON vide), pas une chaîne vide. En pratique, `JSON.parse("{}")` donne `{}`, `parsed.seats` est `undefined`, et `?? 1` s'applique — l'effet décrit est correct. Mais "body vide" est inexact ; dire "body `{}` (objet vide)" est plus précis.
 
 ## Points vérifiés et corrects
 
-- Fichier de test unique (`test/transfers.test.js`, 16 lignes) — confirmé par lecture directe.
-- 3 tests : `seatsLeft`, `isFull`, `listTransfers` — confirmé (lignes 5-7, 9-12, 14-16).
-- Import uniquement depuis `../src/transfers` (ligne 3) — confirmé : `src/server` jamais importé.
-- `test("listTransfers retourne les 3 transferts", ...)` vérifie uniquement `.length === 3`, pas le contenu — confirmé (ligne 15-16).
-- `test("isFull detecte un transfert complet", ...)` couvre les deux cas booléens (`true` et `false`) — confirmé, cas frontière `sold === seats` atteint via `{ seats: 60, sold: 60 }`.
-- Cas manquants pour `seatsLeft` : `sold === 0` et `sold > seats` — confirmé (seul `{ seats: 40, sold: 12 }` testé).
-- Guard `require.main === module` (`src/server.js:27`) present mais non exploité par les tests — confirmé.
-- Runner `node --test test/` (`package.json:6`) sans dépendance externe — confirmé.
-- Aucun secret.
-- Recommandations (test HTTP GET /transfers, test 404, cas limites seatsLeft, renforcement listTransfers) toutes actionnables avec référence fichier:ligne.
+- **Tests unitaires** (`test/transfers.test.js:1-16`) : `seatsLeft` (ligne 5-7), `isFull` (9-12), `listTransfers` (14-16) — 3 tests, 17 lignes. ✓
+- **Tests HTTP sur port éphémère** (`test/server.test.js:8-15`) : `server.listen(0)`, `server.close()`. ✓
+- **T1 mute l'état global** (`test/server.test.js:34-40`) : `sold` passe de 12 à 13, assertion `seatsLeft: 27`. Si rejoué, le test échouera. ✓
+- **T2 409 sur transfert 2 complet** (`test/server.test.js:42-46`) : sans mutation. ✓
+- **T3 404 sur transfert 999** (`test/server.test.js:48-52`) : sans mutation. ✓
+- **`GET /transfers` sans test HTTP** (`VÉRIFIÉ_CODE`) : aucun `test("GET /transfers...")` dans `test/server.test.js`. ✓
+- **Cas limites `seats` absents** (`VÉRIFIÉ_CODE`) : aucun test pour `seats: -1`, `seats: 0`, `seats: 0.5`. ✓
+- **`bookSeats` sans test unitaire direct** (`VÉRIFIÉ_CODE`) : `test/transfers.test.js` importe `{ listTransfers, seatsLeft, isFull }` — pas `bookSeats` (ligne 3). ✓
+- **Stack `node:test` sans dépendances externes** (`VÉRIFIÉ_CODE`) : confirmé par `package.json`. ✓
+- **Flakiness de T1 en mode watch qualifiée `HYPOTHÈSE`** — calibrage correct. ✓
+- **Aucun secret recopié**. ✓
 
 ## Recommandations de correction
 
-Aucune.
+1. Corriger `package.json (ligne 4)` → `package.json:6`.
+2. Corriger "body vide" → "body `{}` (objet JSON vide, `seats` absent → fallback `?? 1`)".

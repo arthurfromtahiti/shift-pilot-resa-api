@@ -4,58 +4,54 @@
 
 ## Compréhension globale
 
-La surface d'attaque est quasi nulle : un seul endpoint `GET /transfers` public, sans corps de requête, sans paramètre de query utilisé, sans dépendance externe. Les données exposées sont un catalogue public (routes, prix, places restantes) — aucune donnée personnelle, aucun secret. Malgré cette surface réduite, deux défauts de robustesse existent : un risque de crash sur URL malformée, et l'absence de headers CORS qui bloquera le frontend `shift-pilot-resa-web` en contexte navigateur.
+Le service est un pilote de démonstration sans aucune couche de sécurité. Les risques sont réels mais assumés pour ce contexte. Le constat le plus sérieux est un **bug fonctionnel avec impact sécurité** : le paramètre `seats` n'est pas validé comme entier positif, ce qui permet de créer des places de nulle part en passant une valeur négative. Ce bug est démontrable par lecture du code seul, sans exécution.
 
 ## Résumé exécutif
 
-Le codebase ne présente pas de vulnérabilité d'injection, d'exposition de secret, d'escalade de privilèges ni d'accès non autorisé à des données sensibles — les données sont publiques et hardcodées. Le risque principal est un crash de process par exception non attrapée dans le handler HTTP : `new URL(req.url, ...)` (`src/server.js:11`) lance une `TypeError` sur certains inputs malformés, sans `try/catch`. L'absence de headers CORS est le second problème concret : `shift-pilot-resa-web` (dépôt séparé, mentionné dans `README.md:4`) sera bloqué par le navigateur dès qu'il tournera sur une origine différente. Ces deux défauts sont corrigeables en quelques lignes. L'absence d'authentification est cohérente avec un endpoint de consultation publique, mais devra être adressée avant tout ajout d'endpoint mutable.
+L'audit identifie cinq points de risque. Un seul est un **bug reproductible immédiatement** : `seats` peut être négatif, ce qui bypasse la garde de capacité et diminue le compteur `sold` (`src/transfers.js:24-25`). Les quatre autres sont des limitations de conception qui sont documentées comme intentionnelles pour un pilote : absence d'authentification, absence de CORS, race condition sur les réservations concurrentes, et parsing JSON silencieux. Le bug sur `seats` négatif est le seul qui devrait être corrigé avant tout accès externe au service, même en phase de test, car il permet à un appelant de manipuler le stock à sa guise.
 
 ## Constats détaillés
 
-**Crash sur URL malformée** — `VÉRIFIÉ_CODE` : `src/server.js:11` exécute `new URL(req.url, \`http://${req.headers.host}\`)` dans le callback de `http.createServer` sans bloc `try/catch`. Le constructeur `URL` lance une `TypeError: Invalid URL` lorsque `req.url` contient des caractères interdits ou une structure non parseable (ex. requêtes HTTP/0.9, scans de ports, proxy CONNECT). En Node.js ≥18, une exception non attrapée dans un callback `http.createServer` n'est pas silencieusement absorbée par le module `http` : elle remonte au processus. Sans `process.on('uncaughtException', ...)` (absent du codebase — `src/server.js` entier lu), le process crashe. C'est un vecteur de DoS involontaire par simple requête malformée.
+**Bug : `seats` non validé comme entier positif (`VÉRIFIÉ_CODE`)** : Dans `src/transfers.js:21-27`, `bookSeats(transferId, seats=1)` reçoit `seats` depuis l'appelant. La seule garde en place est `if (seatsLeft(transfer) < seats)` (ligne 24). Si `seats = -1` : `seatsLeft(transfer)` vaut par exemple 28, et `28 < -1` est `false` → la garde ne se déclenche pas. Ensuite, `transfer.sold += seats` exécute `transfer.sold += -1`, **diminuant** le compteur de sièges vendus. La fonction retourne `{ ok: true, seatsLeft: seatsLeft(transfer) }` avec une valeur de `seatsLeft` augmentée. Effet : un appelant malveillant peut créer des places inexistantes en boucle, jusqu'à ramener `sold` à zéro ou en dessous. Le même raisonnement s'applique à `seats = 0` (opération nulle, retourne 200 sans effets mais sans erreur) et `seats = 0.5` (mutation non entière du compteur). La valeur `seats` arrive de l'appelant HTTP via `src/server.js:36` : `bookSeats(id, seats ?? 1)` où `seats` est issu du JSON parsé sans validation de type (`src/server.js:29-35`).
 
-**Cas `req.headers.host` absent** — `VÉRIFIÉ_CODE` : en HTTP/1.0, le header `Host` n'est pas obligatoire. Si `req.headers.host` vaut `undefined`, la base devient `'http://undefined'` — syntaxiquement valide, donc pas d'exception. Le parsing continue avec un hostname `'undefined'` (chaîne littérale) mais `url.pathname` reste correct. Ce cas dégradé ne crashe pas, mais le comportement est silencieusement inattendu.
+**Absence d'authentification (`VÉRIFIÉ_CODE`)** : `POST /transfers/:id/reserve` (`src/server.js:23-42`) n'exige aucun token, aucune session, aucun header d'autorisation. N'importe quel client peut réserver autant de sièges qu'il le souhaite, autant de fois qu'il le souhaite, sans identité. Sur un pilote de démonstration à accès restreint, c'est acceptable ; sur un environnement accessible via réseau, c'est une surface d'abus directe.
 
-**Absence de headers CORS** — `VÉRIFIÉ_CODE` : `sendJson` à `src/server.js:5-8` ne pose que `Content-Type: application/json`. `README.md:4` indique que l'API est consommée par `shift-pilot-resa-web` (dépôt séparé). Si les deux services tournent sur des origines différentes (ex. `:3100` vs `:3000`), les requêtes cross-origin d'un navigateur seront rejetées avec une erreur CORS avant même d'atteindre le serveur. Aucun header `Access-Control-Allow-Origin` n'est posé nulle part dans `src/server.js`.
+**Absence de headers CORS (`VÉRIFIÉ_CODE`)** : `src/server.js` ne pose aucun header `Access-Control-Allow-Origin`. Le frontend (`shift-pilot-resa-web`) tourne sur un domaine différent (un serveur de fichiers statiques ou un port différent). Par conséquent, tout appel `fetch()` cross-origin depuis le navigateur sera bloqué par la politique CORS du navigateur — le workflow de consultation du catalogue ne peut pas fonctionner tel quel depuis le web, sauf si API et frontend sont servis à la même origine. Ce n'est pas un risque de sécurité stricto sensu (bloquer une requête cross-origin est le comportement attendu), mais c'est un **bug fonctionnel** pour l'intégration frontend.
 
-**Absence d'authentification** — `VÉRIFIÉ_CODE` : `src/server.js` ne comporte aucun middleware de vérification d'identité (pas de token, pas de session, pas de header `Authorization` lu). Pour un endpoint de consultation publique (catalogue de transferts), c'est acceptable. `HYPOTHÈSE` : l'absence d'authentification est intentionnelle pour ce pilote ; elle devra être revue avant tout endpoint mutable (réservation, annulation).
+**Race condition sur les réservations concurrentes (`HYPOTHÈSE — mode cluster uniquement`)** : `bookSeats` dans `src/transfers.js:21-27` lit `seatsLeft(transfer)` (ligne 24), puis mute `transfer.sold` (ligne 25), en deux opérations non atomiques. Cependant, `bookSeats` est entièrement synchrone (aucun `await`, aucun I/O dans son corps) et Node.js est single-threaded : une fois que le callback `req.on("end")` est déclenché, il s'exécute jusqu'à son retour sans jamais rendre la main à l'event loop. Deux requêtes POST simultanées sont donc traitées séquentiellement par l'event loop — leurs callbacks ne peuvent pas s'interleaver. La race condition est **impossible en process unique dans l'état actuel**. Elle ne deviendrait réelle qu'en présence d'appels asynchrones dans `bookSeats` (lecture en base de données, `await`) ou en mode cluster (plusieurs instances Node.js partageant les mêmes données). `HYPOTHÈSE — mode cluster uniquement` : risque conditionnel à une évolution de l'architecture, pas dans l'état synchrone actuel.
 
-**Absence de rate-limiting** — `VÉRIFIÉ_CODE` : aucun mécanisme de limitation du débit dans `src/server.js`. Pour un pilote de démonstration, c'est sans conséquence. En production, c'est un risque de surcharge.
+**Parsing JSON silencieux (`VÉRIFIÉ_CODE`)** : `src/server.js:30-35` : si le corps de la requête est vide ou malformé, `JSON.parse` lève une exception catchée silencieusement, et `seats` est positionné à `undefined`. Le fallback `seats ?? 1` dans `src/server.js:36` assure alors la réservation d'un siège. Ce comportement peut masquer des bugs côté client (client qui envoie un JSON invalide voit sa requête traitée comme une réservation d'un siège, sans avertissement).
 
-**Aucune donnée sensible exposée** — `VÉRIFIÉ_CODE` : le catalogue exposé (`id, from, to, price, seatsLeft` — `src/server.js:15-19`) ne contient aucune donnée personnelle, aucun identifiant de session, aucun token. Les champs internes `seats` et `sold` ne sont pas exposés dans la projection HTTP. `package.json` ne contient aucun secret, aucune URL de base de données (`package.json:1-7`).
-
-**Absence de secrets dans le code** — `VÉRIFIÉ_CODE` : revue complète des 4 fichiers sources — aucun token, mot de passe, clé API, DSN de base de données. La seule variable d'environnement lue est `PORT` (`src/server.js:26`), inoffensive.
+**En-tête `Host` utilisé dans la construction d'URL (`VÉRIFIÉ_CODE`)** : `new URL(req.url, \`http://${req.headers.host}\`)` (`src/server.js:11`). La valeur `req.headers.host` provient du client et n'est pas validée. En pratique, l'URL est uniquement utilisée pour extraire `url.pathname`, donc l'impact est limité à une éventuelle exception si le header `Host` est absent ou malformé. Ce n'est pas une injection exploitable dans ce contexte, mais c'est une mauvaise pratique sur un code qui voudrait être durci.
 
 ## Forces
 
-- Surface d'attaque quasi nulle : un seul endpoint `GET`, sans body parsing, sans query params utilisés.
-- Aucune donnée sensible dans les réponses HTTP : `seats` et `sold` exclus de la projection (`src/server.js:15-19`).
-- Zéro dépendance externe : pas de vulnérabilité NPM transitive possible (`package.json:7`).
-- Pas de secret hardcodé dans le code source (revue complète des 4 fichiers).
+- **Séparation des données exposées** : `GET /transfers` ne retourne pas les champs internes `seats` et `sold` (`src/server.js:14-20`), uniquement la projection publique `{ id, from, to, price, seatsLeft }`. Pas d'exposition accidentelle de la structure interne.
+- **Aucune dépendance externe** : surface d'attaque via la supply chain nulle (pas de `node_modules`).
 
 ## Dettes techniques
 
-- **Pas de `try/catch` autour de `new URL(...)`** (`src/server.js:11`) : crash potentiel sur requête malformée.
-- **Pas de headers CORS** : le frontend `shift-pilot-resa-web` sera bloqué par le navigateur en contexte cross-origin.
-- **Pas de rate-limiting** : aucune protection contre la surcharge.
+- **`seats` non validé** : absence de toute vérification que `seats` est un entier ≥ 1 (`src/server.js:29-35`, `src/transfers.js:21-27`). La fonction `bookSeats` reçoit des valeurs qu'elle ne devrait pas accepter.
+- **Absence de headers de sécurité HTTP** : pas de `CORS`, pas de `X-Content-Type-Options`, pas de `Content-Security-Policy`. Pour un pilote de démonstration, c'est hors périmètre ; pour toute exposition publique, ce serait un prérequis.
 
 ## Zones critiques
 
-- `src/server.js:11` — parsing URL non gardé : seul point du code où une exception non attrapée peut faire crasher le process.
+- **`src/transfers.js:21-27` (`bookSeats`)** : c'est ici que le bug `seats` négatif se concrétise. La garde de capacité `seatsLeft < seats` est la seule protection contre des mutations aberrantes du stock — et elle est insuffisante.
+- **`src/server.js:29-36`** (parsing et propagation de `seats`) : c'est le point d'entrée de la valeur non validée.
 
 ## Risques
 
-- **DoS par requête malformée** : `new URL(req.url, ...)` sans `try/catch` (`src/server.js:11`). Impact : crash du process Node.js. Probabilité : faible sur un réseau contrôlé, non nulle sur internet.
-- **Blocage CORS** : absence de `Access-Control-Allow-Origin` (`src/server.js:5-8`). Impact : `shift-pilot-resa-web` inutilisable depuis un navigateur sur une origine différente (`README.md:4`). Probabilité : certaine si les deux services tournent sur des ports différents.
-- **Authentification absente avant extension** : `HYPOTHÈSE` — tout ajout d'un endpoint mutable (réservation) sans authentification crée un risque d'abus. Le risque n'est pas actif aujourd'hui (aucun endpoint mutable), mais le pattern du code ne prépare pas ce terrain.
+- **Bug immédiatement exploitable : `seats` négatif ou nul** — un appelant passe `{ "seats": -1 }` en body POST, la réservation aboutit avec 200, et `transfer.sold` décroît de 1 (libérant un siège inexistant). Reproduisible par lecture du code (`src/transfers.js:24-25`). Impact : manipulation du stock à volonté par n'importe quel appelant. Gravité : **critique pour toute exposition réseau**, même dans un pilote.
+- **Absence de CORS bloquant l'intégration frontend** : le frontend web ne peut pas appeler l'API depuis un domaine/port différent sans que le navigateur bloque la requête. Fonctionnalité actuellement non utilisable depuis le web. Impact fonctionnel, pas de sécurité.
+- **Réservations illimitées sans authentification** : accès anonyme à la mutation de stock — `VÉRIFIÉ_CODE`, assumé pour le pilote.
 
 ## Recommandations priorisées
 
-1. **Entourer `new URL(...)` d'un `try/catch`** et retourner un 400 sur exception — `src/server.js:11` — risque crash actif
-2. **Ajouter `Access-Control-Allow-Origin`** dans `sendJson` ou dans un middleware — `src/server.js:5-8` — bloquant pour le frontend
-3. **Prévoir une couche d'authentification** avant tout ajout d'endpoint mutable — décision architecturale à prendre en amont de l'implémentation
+1. **Valider `seats` dans `bookSeats` ou dans `src/server.js`** avant tout accès externe, même de test : ajouter `if (typeof seats !== 'number' || !Number.isInteger(seats) || seats < 1)` et retourner une erreur 400 — `src/server.js:29-36` ou `src/transfers.js:21`. Priorité : **haute** (bug, pas choix de conception).
+2. **Ajouter les headers CORS** (`Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`) dans `sendJson` ou dans un middleware dédié — `src/server.js:5-8`. Priorité : haute (bloque l'intégration frontend).
+3. **Authentification** avant toute montée en charge ou accès public — hors périmètre pilote, mais doit figurer dans la roadmap.
 
 ## Questions ouvertes
 
-- `shift-pilot-resa-web` sera-t-il servi sur la même origine que l'API (ex. proxy inverse) ou sur un port différent ? La réponse détermine l'urgence du problème CORS.
-- Un gestionnaire `process.on('uncaughtException', ...)` est-il posé au niveau superviseur (Docker, PM2) ou faut-il le gérer dans le code ?
+- Quel est le niveau d'isolation réseau du pilote ? Si l'API n'est accessible qu'en intranet/localhost, le bug `seats` négatif est moins urgent qu'en exposition Internet.
+- La politique CORS cible-t-elle un domaine précis ou wildcard `*` ? Décision board.

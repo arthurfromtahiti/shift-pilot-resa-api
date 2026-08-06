@@ -1,86 +1,49 @@
-# Relecture — CARTE_DES_DOMAINES.md
-
-> Relecteur : Relecteur de domaines (agent `3a14efea`) — modèle `claude-sonnet-4-6`
-> Producteur : Découverte de domaines (agent `d910e19c`) — modèle différent
-> Dépôt : `shift-pilot-resa-api`
-> Date : 2026-08-05
-> Mode : réconciliation (zéro drift détecté entre `main` et `onboarding/artifacts`)
+# Relecture — CARTE_DES_DOMAINES.md (shift-pilot-resa-api)
 
 ## Verdict global
 
-**Bon** — La carte est exploitable sans réserve bloquante. Vérification indépendante des 8 contrôles sur le code source réel (`main`, SHA `5e984c5`) : tous passés. Les références de lignes sont exactes, les niveaux de confiance calibrés honnêtement, aucune incertitude dissimulée. Le signalement explicite de la frontière floue `catalogue-transferts`/`disponibilite-places` dans la section « Incertitudes » est correct et honnête.
-
----
+**Bon** — Carte exacte, sourcée ligne par ligne, honnête sur ses limites. Toutes les affirmations ont été vérifiées dans le code source. La granularité (4 domaines) est appropriée pour un dépôt de ~80 lignes. Aucun défaut bloquant, aucune correction requise.
 
 ## Problèmes bloquants
 
 *Aucun.*
 
----
-
 ## Problèmes mineurs
 
 *Aucun.*
 
----
-
 ## Points vérifiés et corrects
 
-**Grille appliquée — 8 contrôles, 8 passés.**
+**Contrôle 1 — Domaine `catalogue-transferts` prouvé.**
+Entité `transfers` vérifiée à `src/transfers.js:3-7` (tableau, champs `id`, `from`, `to`, `seats`, `sold`, `price`). Route `GET /transfers` vérifiée à `src/server.js:13-21`. Fonction `listTransfers()` à `src/transfers.js:9-11`. Indices de rattachement (`transfers`, `from`, `to`, `price`) circonscrits à ces deux fichiers — ils ne couvrent pas l'ensemble du dépôt.
 
-### 1. Chaque domaine est prouvé
+**Contrôle 2 — Domaine `disponibilite-reservation` prouvé.**
+`seatsLeft()` à `src/transfers.js:13-15`, `isFull()` à `src/transfers.js:17-19`, `bookSeats()` à `src/transfers.js:21-27`. Route `POST /transfers/:id/reserve` à `src/server.js:23-42`. Retour `{ ok, reason?, seatsLeft? }` confirmé : `{ ok: false, reason: "not_found" }` ligne 23, `{ ok: false, reason: "full" }` ligne 24, `{ ok: true, seatsLeft: ... }` ligne 26. Tests HTTP à `test/server.test.js:34-52` (200, 409, 404 confirmés).
 
-Vérification ligne par ligne sur chaque fichier source cité (branche `main`) :
+**Contrôle 3 — Affirmation sur `isFull` « exporté mais mort côté runtime ».**
+`src/server.js:3` : `const { listTransfers, seatsLeft, bookSeats } = require("./transfers")` — `isFull` absent de l'import. Confirmé : `isFull` n'est importé que par `test/transfers.test.js:3` et utilisé aux lignes 9-12. La garde de complétude effective en production passe bien par `seatsLeft(transfer) < seats` à `src/transfers.js:24`, pas par `isFull()`. Description exacte.
 
-| Domaine | Preuve vérifiée |
-|---|---|
-| `catalogue-transferts` | `src/transfers.js:3-7` → tableau `transfers` (3 lignes, champs `id/from/to/seats/sold/price` confirmés). `src/transfers.js:9-11` → `listTransfers()`. `src/server.js:13-20` → `GET /transfers` avec projection `id/from/to/price/seatsLeft`. ✓ |
-| `disponibilite-places` | `src/transfers.js:13-15` → `seatsLeft(t) = t.seats - t.sold`. `src/transfers.js:17-19` → `isFull(t) = seatsLeft(t) === 0`. `src/server.js:3` → seul `listTransfers` et `seatsLeft` importés, confirme que `isFull` n'est pas câblé à une route. `test/transfers.test.js:5-12` → `isFull` testé ici seulement. ✓ |
-| `exposition-http-api` | `src/server.js` lu en entier (30 lignes). `sendJson` : l.5-8. `http.createServer` : l.10. Routage `url.pathname`/`req.method` : l.11-13. 404 : l.23. `PORT`/`listen` : l.26-29. `module.exports = server` : l.30. ✓ |
-| `qualite-tests` | `test/transfers.test.js:1-16` relu. 3 tests (`seatsLeft` l.5-7, `isFull` l.9-12, `listTransfers` l.14-16). `package.json` → `"test": "node --test test/"`. ✓ |
+**Contrôle 4 — Fallback silencieux corps JSON malformé.**
+`src/server.js:31-35` : `body ? JSON.parse(body) : {}` avec catch → `seats = undefined`. Ligne 36 : `bookSeats(id, seats ?? 1)` → défaut à 1 en cas de corps vide ou invalide. Description exacte ; incertitude correctement signalée comme relevant de l'audit robustesse.
 
-### 2. Indices de rattachement testés
+**Contrôle 5 — Domaine `exposition-http-api` séparé du métier.**
+`src/server.js` ne porte aucune entité métier — il délègue à `listTransfers`, `seatsLeft`, `bookSeats`. La séparation technique/métier est réelle et non artificielle.
 
-- `transfers`/`from`/`to`/`price` → cantonnés à `src/transfers.js` et `src/server.js`. Ne débordent pas.
-- `seats`/`sold`/`seatsLeft`/`isFull` → cantonnés à `src/transfers.js` et `test/transfers.test.js`.
-- `http`/`createServer`/`sendJson`/`url.pathname`/`PORT` → `src/server.js` uniquement.
-- `node:test`/`node:assert`/`.test.js` → `test/` uniquement.
+**Contrôle 6 — Domaine `qualite-tests` prouvé.**
+`test/transfers.test.js:1-16` (3 tests logique pure), `test/server.test.js:1-52` (3 tests intégration HTTP avec vrai serveur). `package.json` : `"test": "node --test test/*.test.js"`. Confiance `medium` justifiée : couverture HTTP présente mais `GET /transfers` et corps malformé non testés — signalé dans les types de workflows attendus.
 
-Aucun indice n'inonde le repo. ✓
+**Contrôle 7 — Granularité.**
+4 domaines pour ~80 lignes de source (2 fichiers : `src/transfers.js`, `src/server.js`). Limite basse de la grille (4-12), mais justifiée : dépôt volontairement minimal. La frontière `catalogue-transferts` / `disponibilite-reservation` est défendable (lecture/offre vs écriture/stock), honnêtement signalée comme incertitude, et renforcée par l'ajout de la route de réservation (SHIA-61).
 
-### 3. Granularité
+**Contrôle 8 — Champ « Dépend de la base » honnête.**
+Tous les domaines à `non`. Vérifié : `src/transfers.js:3-7` (données codées en dur), `src/transfers.js:25` (`transfer.sold += seats` — mutation mémoire uniquement). Aucun ORM, aucun fichier de schéma, aucun signal de persistence. Correct.
 
-4 domaines pour 3 fichiers source (~68 lignes) : en bas de la fourchette 4–12, cohérent avec la nature pilote. La frontière floue `catalogue-transferts`/`disponibilite-places` est signalée dans les « Incertitudes » — honnêteté correcte, décision de fusion éventuelle laissée au coordinateur. ✓
+**Contrôle 9 — Journal de réconciliation.**
+Confrontation canonique (pre-SHIA-61) vs code courant vérifiée : `bookSeats()` et `POST /transfers/:id/reserve` absents du code d'origine, présents à `src/transfers.js:21-27` et `src/server.js:23-42`. Les quatre lignes du tableau de réconciliation sont factuellement exactes.
 
-### 4. Cœurs corrects
-
-`catalogue-transferts` et `disponibilite-places` marqués « cœur » : justifié (raison d'être du service + versant occupation). `exposition-http-api` et `qualite-tests` marqués « support » : exact. ✓
-
-### 5. Oublis
-
-Exploration indépendante : `src/server.js`, `src/transfers.js`, `test/transfers.test.js`, `package.json`, `README.md` — tout est couvert. Aucun contrôleur, job, intégration ou module non attribué. ✓
-
-### 6. Techniques séparés du métier
-
-`exposition-http-api` catégorisé « technique / support », non fusionné au métier. ✓
-
-### 7. Confiances et incertitudes honnêtes
-
-| Domaine | Confiance | Justification vérifiée |
-|---|---|---|
-| `catalogue-transferts` | `high` | Preuve complète et directe (`VÉRIFIÉ_CODE`). ✓ |
-| `disponibilite-places` | `medium` | Champ `sold` jamais incrémenté dans `src/`. Grep confirmé : zéro hit pour `POST|PUT|DELETE|PATCH|book|reserv|resa` dans `src/` et `test/`. ✓ |
-| `exposition-http-api` | `high` | `src/server.js` lu exhaustivement. ✓ |
-| `qualite-tests` | `low` | 3 tests, logique pure, aucune couverture HTTP. ✓ |
-
-4 incertitudes en section dédiée — toutes légitimes et vérifiables. ✓
-
-### 8. Dépend de la base — champ honnête
-
-Tous les domaines marqués `non`. Vérifié : `package.json` a zéro dépendance externe, aucun ORM, aucune chaîne de connexion, aucune migration, données en mémoire (`src/transfers.js:3-7`). ✓
-
----
+**Contrôle 10 — Couverture du dépôt (oublis ?).**
+Fichiers explorés : `src/transfers.js`, `src/server.js`, `test/transfers.test.js`, `test/server.test.js`, `package.json`, `README.md`. Chacun est couvert par au moins un domaine. Aucun pan non cartographié.
 
 ## Recommandations de correction
 
-*Aucune correction demandée.* La carte est publiable.
+Aucune correction requise. La carte peut passer à l'étape suivante (analyse des workflows).

@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — L'audit architectural est précis et proportionné à l'échelle du service (2 fichiers source, ~51 lignes). Les constats sont vérifiés à la ligne, les dettes sont correctement qualifiées comme latentes (non bloquantes aujourd'hui), et les forces sont réelles.
+**Bon** — L'audit est exact, sourcé et bien calibré. Toutes les références de code vérifiées. Les statuts de preuve sont correctement employés. Les risques sont concrets et proportionnés à la taille du projet.
 
 ## Problèmes bloquants
 
@@ -14,17 +14,15 @@ Aucun.
 
 ## Points vérifiés et corrects
 
-- `listTransfers()` retourne `transfers` sans copie (`src/transfers.js:9-11` : `return transfers`) — confirmé.
-- Routage inline : un seul `if` sur `url.pathname === '/transfers' && req.method === 'GET'` (`src/server.js:13`) — confirmé.
-- Guard `require.main === module` (`src/server.js:27`) — confirmé.
-- `module.exports = server` à `src/server.js:30` — confirmé (dernière ligne du fichier de 30 lignes).
-- Absence de script `start` dans `package.json` — confirmé : seul `"test": "node --test test/"` est déclaré.
-- Encapsulation correcte : `src/server.js` n'accède pas à `seats` ni `sold` directement (projection `id, from, to, price, seatsLeft` aux lignes 14-20) — confirmé.
-- Absence d'injection de dépendance sur `transfers` — confirmé : `const transfers = [...]` est une constante module-level dans `src/transfers.js:3`.
-- Renvoi vers `SECURITY_ROBUSTNESS_AUDIT.md` pour le risque URL malformée — correct, pas de double-documentation.
-- Gravité des dettes correctement calibrée : latentes pour le pilote, critiques à l'extension — nuance bien rendue.
-- Aucun secret.
+- **Taille du codebase** : 51 lignes (`src/server.js`) + 30 lignes (`src/transfers.js`) = 81 lignes — "~80 lignes" exact. Vérifié par lecture directe.
+- **Séparation des couches** (`VÉRIFIÉ_CODE`, `src/transfers.js:1-30`, `src/server.js:1-51`) : aucune dépendance `http` dans `transfers.js`, aucun calcul métier dans `server.js`. Correct.
+- **Routage manuel** (`VÉRIFIÉ_CODE`, `src/server.js:10-44`) : deux blocs `if` testant `url.pathname` et `req.method` sans table de routes ni middleware. Correct.
+- **PORT configurable** (`VÉRIFIÉ_CODE`, `src/server.js:47`) : `process.env.PORT || 3100` — ligne 47 exacte.
+- **Export + garde `require.main`** (`VÉRIFIÉ_CODE`, `src/server.js:48`, `src/server.js:51`) : confirmé.
+- **Données + logique dans le même module** (`VÉRIFIÉ_CODE`, `src/transfers.js:3-7` et `9-27`) : confirmé.
+- **Risques qualifiés en `HYPOTHÈSE`** (scalabilité du routage) — calibrage correct : non mesuré mais structurellement inévitable si le service s'étend.
+- **Aucun secret recopié**. ✓
 
 ## Recommandations de correction
 
-Aucune.
+Néant.

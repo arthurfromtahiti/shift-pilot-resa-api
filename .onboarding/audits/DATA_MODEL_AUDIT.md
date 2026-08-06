@@ -4,63 +4,56 @@
 
 ## Compréhension globale
 
-Le modèle de données est un tableau JavaScript en mémoire de 3 objets littéraux, déclaré dans `src/transfers.js:3-7`. Il n'existe aucune base de données, aucun ORM, aucune migration, aucune validation de schéma. Les données sont hardcodées et réinitialisées à chaque démarrage du process. La review de la carte des domaines a confirmé que tous les domaines sont marqués `Dépend de la base : non`.
+Le modèle de données de `shift-pilot-resa-api` est intentionnellement minimal : un unique tableau JavaScript codé en dur en mémoire représente l'intégralité du catalogue et l'état des réservations. Il n'y a pas de base de données, pas de schéma formel, pas de migrations. Tout l'état mutable est perdu au redémarrage du process.
 
 ## Résumé exécutif
 
-Le modèle est intentionnellement minimal et cohérent avec la nature pilote du service. Trois constats méritent attention : `listTransfers()` expose une référence mutable au tableau interne, permettant une mutation accidentelle de l'état global sans mécanisme de protection ; le champ `sold` existe mais n'est jamais modifié à l'exécution, rendant la disponibilité calculée statique ; et l'absence de validation d'entrée dans les fonctions de calcul produit des résultats incohérents si les données ne respectent pas l'invariant `sold ≤ seats`. Ces dettes sont sans conséquence en pilote mais devront toutes être adressées avant tout ajout de logique de réservation.
+Une seule entité, `transfer`, portant six champs, stockée dans un tableau global in-memory. La structure est simple, cohérente et bien documentée dans la carte des domaines. Deux points méritent l'attention : (1) le catalogue de départ inclut un transfert pré-rempli à capacité maximale (`id: 2`, Papeete → Bora Bora, 60/60 sièges vendus) — ce qui ressemble à une donnée de test figée dans le seed de production ; (2) le seul champ muté (`sold`) n'est protégé par aucune invariant de borne inférieure côté données — c'est la logique `bookSeats` qui assure l'invariant `sold ≥ 0`, sans filet de sécurité dans la structure elle-même. Pour un pilote, ce modèle est parfaitement adapté. Pour un service réel, la migration vers une base de données exigera des décisions structurantes (schéma, contraintes, transactions) sans point de départ formel.
 
 ## Constats détaillés
 
-**Structure du catalogue** — `VÉRIFIÉ_CODE` : le tableau `transfers` (`src/transfers.js:3-7`) contient 3 objets avec les champs `id` (entier), `from` (chaîne, ville de départ), `to` (chaîne, ville d'arrivée), `seats` (entier, capacité totale), `sold` (entier, places vendues), `price` (entier, prix en XPF). Le schéma est implicite — aucun type TypeScript, aucun schéma JSON, aucun validateur.
+**Structure de l'entité `transfer` (`VÉRIFIÉ_CODE`)** : `src/transfers.js:3-7` déclare le tableau `transfers` avec trois entrées, chacune de forme `{ id: number, from: string, to: string, seats: number, sold: number, price: number }`. Les champs `id`, `from`, `to`, `seats` et `price` ne sont jamais mutés — seul `sold` l'est (via `transfer.sold += seats` dans `bookSeats`, `src/transfers.js:25`). Il n'existe aucune classe, aucun type formel, aucune validation de structure à la création.
 
-```
-{ id: 1, from: "Papeete", to: "Moorea",    seats: 40, sold: 12, price:  3500 }
-{ id: 2, from: "Papeete", to: "Bora Bora", seats: 60, sold: 60, price: 21000 }
-{ id: 3, from: "Raiatea", to: "Tahaa",     seats: 20, sold:  5, price:  1800 }
-```
+**Catalogue statique codé en dur (`VÉRIFIÉ_CODE`)** : les trois transferts sont instanciés à l'initialisation du module. Il n'y a pas de lecture depuis une source externe (fichier de config, base de données, API) — les données vivent dans le code source lui-même. Cela signifie que tout ajout, modification ou suppression d'un transfert passe par un changement de code et un redéploiement.
 
-**Référence mutable exposée** — `VÉRIFIÉ_CODE` : `listTransfers()` retourne `transfers` directement (`src/transfers.js:10: return transfers`). L'appelant reçoit une référence au tableau interne du module, pas une copie. Une mutation sur le résultat (ex. `listTransfers()[0].sold = 999`) modifie l'état global du module — observable par tous les appels suivants dans le même process. L'appelant actuel (`src/server.js:14`) utilise `.map()` — opération de lecture pure — mais le contrat n'est pas garanti par le code.
+**Donnée de test figée dans le seed (`VÉRIFIÉ_CODE`)** : le transfert `id: 2` (Papeete → Bora Bora) est déclaré avec `seats: 60, sold: 60` (`src/transfers.js:5`), soit un taux de remplissage de 100 %. Ce n'est pas un état que le service peut atteindre naturellement au démarrage — c'est un état de test (transfert complet) intégré dans les données de départ. Il est utilisé par `test/server.test.js:42` (test 409) mais il fait aussi partie du catalogue réel retourné par `GET /transfers`. Un utilisateur interrogeant l'API verra ce transfert comme complet dès la première requête, ce qui peut créer de la confusion si le catalogue est présenté comme réel.
 
-**`sold` figé à l'exécution** — `VÉRIFIÉ_CODE` : le champ `sold` est initialisé dans le tableau littéral et n'est jamais modifié au runtime. Grep de `src/` : zéro occurrence de `sold =` ou `sold +=` (confirmé par la relecture `RELECTURE_WORKFLOW_CALCUL_DISPONIBILITE.md`). `seatsLeft(t)` calcule donc `t.seats - t.sold` sur une valeur de `sold` statique — la disponibilité affichée reflète l'état initial hardcodé, pas l'état réel de vente.
+**Invariant de capacité géré par code, pas par structure (`VÉRIFIÉ_CODE`)** : l'invariant `seatsLeft(transfer) ≥ 0` (équivalent : `sold ≤ seats`) est garanti par la garde `if (seatsLeft(transfer) < seats)` dans `bookSeats` (`src/transfers.js:24`). Rien dans la structure des données ne l'impose — si quelqu'un écrit directement `transfer.sold = 9999` depuis un autre point du code, l'invariant est violé sans erreur. La protection est donc comportementale, pas structurelle.
 
-**Transfert id 2 plein dès le démarrage** — `VÉRIFIÉ_CODE` : `src/transfers.js:5` : `sold: 60, seats: 60`. Le transfert Papeete→Bora Bora est entièrement vendu dans les données initiales. `seatsLeft` retourne `0`, `isFull` retourne `true`. `HYPOTHÈSE` : c'est un fixture de test pour exercer le cas de saturation (`isFull` est testé avec `{ seats: 60, sold: 60 }` dans `test/transfers.test.js:10`). Il n'y a pas d'autre explication dans le code ou la documentation.
+**Pas d'identifiant auto-incrémenté (`VÉRIFIÉ_CODE`)** : les IDs (`1`, `2`, `3`) sont assignés manuellement dans le tableau (`src/transfers.js:3-7`). Il n'y a pas de générateur d'ID. Tout ajout de transfert dans le catalogue nécessite un ID choisi manuellement et unique.
 
-**Absence de validation des invariants** — `VÉRIFIÉ_CODE` : `seatsLeft(transfer)` (`src/transfers.js:13-15`) et `isFull(transfer)` (`src/transfers.js:17-19`) opèrent sur tout objet passé en paramètre sans vérifier que `transfer.sold` est un entier positif ni que `transfer.sold ≤ transfer.seats`. Si `sold > seats`, `seatsLeft` retourne un entier négatif et `isFull` retourne `false` — état incohérent, aucune erreur levée. Si `sold` ou `seats` sont `undefined`, `seatsLeft` retourne `NaN`, qui se sérialise en `null` dans JSON.
-
-**Aucune persistance** — `VÉRIFIÉ_CODE` : `package.json:7` liste zéro dépendance externe. Aucun ORM, aucun driver de base de données, aucun accès fichier dans les sources. Un redémarrage du process remet `sold` à ses valeurs initiales.
+**Volatilité totale de l'état (`VÉRIFIÉ_CODE`)** : `transfer.sold` est muté en mémoire dans le processus Node.js. Un redémarrage du process réinitialise `sold` aux valeurs du tableau (`12`, `60`, `5`) — toutes les réservations effectuées depuis le dernier démarrage sont perdues. C'est explicitement documenté dans WORKFLOWS.md et accepté pour le pilote.
 
 ## Forces
 
-- Schéma des objets `transfer` cohérent sur les 3 entrées : mêmes champs, mêmes types (`src/transfers.js:3-7`).
-- Encapsulation correcte : `seats` et `sold` ne sont pas exposés dans la projection HTTP — seul `seatsLeft` (valeur calculée) est transmis (`src/server.js:15-19`).
-- Les fonctions de calcul (`seatsLeft`, `isFull`) opèrent sur le paramètre passé et non sur le tableau global — testables indépendamment des données en mémoire (`test/transfers.test.js:5-12`).
+- **Entité unique et claire** : une seule structure `transfer` avec des responsabilités nettes — le modèle est facile à lire et à comprendre en entier en moins de 10 lignes (`src/transfers.js:3-7`).
+- **Projection publique correcte** : `GET /transfers` expose `{ id, from, to, price, seatsLeft }` et masque `seats` et `sold` (`src/server.js:14-20`). Les champs internes de gestion du stock ne fuient pas dans l'API publique.
+- **Seul point de mutation** : `bookSeats` est la seule fonction qui modifie `sold` (`src/transfers.js:25`). La mutation est localisée et traçable.
 
 ## Dettes techniques
 
-- **`listTransfers()` retourne une référence mutable** (`src/transfers.js:10`) — absence de copie défensive.
-- **`sold` n'est jamais modifié** — le champ est présent mais orphelin de toute logique de réservation.
-- **Pas de validation de schéma** — comportements silencieusement incorrects si les données ne respectent pas `0 ≤ sold ≤ seats`.
+- **Pas de couche de persistance** : le modèle est entièrement in-memory et volatile. Il n'existe pas de frontière entre « données » et « état du process ». Toute introduction d'une base de données repart de zéro.
+- **Donnée de test dans le seed de production** : `id: 2` à 60/60 vend est un état de test figé dans les données initiales — confusion pour un utilisateur réel, difficulté à distinguer une donnée intentionnelle d'un état accidentel (`src/transfers.js:5`).
+- **Invariant non structurel** : la borne inférieure `sold ≥ 0` et la borne supérieure `sold ≤ seats` ne sont pas imposées par la structure — elles reposent entièrement sur `bookSeats`. Tout contournement de cette fonction (écriture directe, bug dans l'initialisation du catalogue) viole l'invariant silencieusement.
 
 ## Zones critiques
 
-- `src/transfers.js:9-11` — `listTransfers()` : point d'entrée de toute mutation accidentelle de l'état global.
-- `src/transfers.js:13-15` — `seatsLeft()` : règle métier centrale, non gardée contre des entrées invalides.
+- **`src/transfers.js:3-7`** : les données initiales mélangent données de catalogue réelles et état de test (transfert 2 complet). Un senior noterait immédiatement le `sold: 60` égal à `seats: 60` comme suspect.
+- **`src/transfers.js:25`** (`transfer.sold += seats`) : seule mutation de données. Si `seats` est mal validé (cf. audit sécurité), c'est ici que l'invariant peut être violé.
 
 ## Risques
 
-- **Corruption silencieuse de l'état** : si un futur endpoint modifie `sold` via la référence retournée par `listTransfers()` plutôt que via une fonction dédiée, la mutation est globale et non auditée.
-- **`seatsLeft` négatif si survente** : l'API exposerait des valeurs négatives de `seatsLeft` sans erreur — un client serait contraint de les interpréter. Impact : confiance client dans les données.
-- **Perte de réservations au redémarrage** : toute réservation incrémentant `sold` en mémoire serait perdue dès le redémarrage du process. Ce risque est inactif aujourd'hui (pas d'endpoint de réservation) mais structurel.
+- **Perte de toutes les réservations au redémarrage** : comportement attendu et documenté pour le pilote, mais risque critique si le service est utilisé en production sans migration vers une base de données — `VÉRIFIÉ_CODE`.
+- **Inventaire fictif (transfert 2 toujours complet)** : un client interrogeant l'API verra le transfert Papeete → Bora Bora comme complet dès le démarrage, ce qui peut induire en erreur si ce transfert est censé être réel — `VÉRIFIÉ_CODE` (`src/transfers.js:5`).
+- **Violation de l'invariant de capacité par bug de validation** : si `bookSeats` reçoit une valeur `seats` négative (cf. audit sécurité), `transfer.sold` peut descendre sous zéro — l'invariant est rompu sans détection automatique — `VÉRIFIÉ_CODE` (`src/transfers.js:24-25`).
 
 ## Recommandations priorisées
 
-1. **Retourner une copie shallow dans `listTransfers()`** — `src/transfers.js:10` : `return [...transfers]` — prévenir toute mutation accidentelle avant l'ajout d'un endpoint mutable
-2. **Ajouter une validation des invariants** dans `seatsLeft` ou dans une fonction dédiée (`assertValidTransfer`) avant de traiter les réservations
-3. **Décider du mécanisme de persistance** (`sold` persisté en base, fichier, ou API externe) avant d'implémenter un endpoint de réservation — ce choix architecture tout le reste
+1. **Corriger le seed de données** : soit initialiser `id: 2` avec `sold: 0` pour en faire un transfert disponible, soit le retirer du catalogue réel et le réserver aux tests — `src/transfers.js:5`. Priorité : **moyenne** (impacte la clarté du produit dès le premier démarrage).
+2. **Ajouter une validation de l'invariant de borne** dans `bookSeats` : vérifier que `seats` est un entier positif avant toute mutation — `src/transfers.js:21-27` (voir aussi audit sécurité, recommandation 1). Priorité : **haute**.
+3. **Identifier et documenter le contrat de migration** : avant d'introduire une base de données, décider si `id` devient auto-incrémenté, quel ORM/query builder est utilisé, et si des contraintes de base reprennent les invariants actuellement portés par le code.
 
 ## Questions ouvertes
 
-- Le champ `sold` est-il destiné à être incrémenté par un endpoint de réservation dans ce même service, ou par une synchronisation depuis un système externe (ex. backoffice, PMS) ?
-- Le fixture transfert id 2 (`sold: 60`) sera-t-il remplacé par des données réelles avant mise en production, ou le catalogue sera-t-il alimenté depuis une base ?
-- Faut-il gérer le cas de survente (`sold > seats`) ou garantir l'invariant en amont (validation à l'écriture) ?
+- Le catalogue est-il destiné à être éditable en prod (ajout de nouveaux transferts) sans redéploiement ? Si oui, une interface d'administration ou un fichier de configuration externe est nécessaire.
+- La perte de données au redémarrage est-elle acceptable en phase de beta ? À quel moment la migration vers une persistance devient-elle bloquante pour les utilisateurs ?
