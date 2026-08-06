@@ -35,7 +35,7 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
 4. L'ID est extrait et converti : `parseInt(reserveMatch[1], 10)` (`src/server.js:25`).
 5. Le corps HTTP est accumulé chunk par chunk : `req.on("data", chunk => body += chunk)` (`src/server.js:27-28`).
 6. À la fin du corps (`req.on("end", ...)`), le JSON est parsé avec `body ? JSON.parse(body) : {}` enveloppé dans un `try/catch` — un corps vide ou malformé produit `seats = undefined` sans erreur visible (`src/server.js:28-35`).
-7. Le serveur valide que `seats` est un entier positif (ligne 37-39), rejette avec 400 si invalid.
+7. Le serveur applique le défaut : `const seatsValue = seats ?? 1` (ligne 36), puis valide que `seatsValue` est un entier positif (ligne 37-39), rejette avec 400 et le message `"seats must be a positive integer"` si invalid.
 8. `bookSeats(id, seatsValue)` est appelé (`src/server.js:40`).
 9. Dans `bookSeats(transferId, seats)` (`src/transfers.js:25-34`) :
    - Valide que `seats > 0` et `Number.isInteger(seats)` (ligne 26)
