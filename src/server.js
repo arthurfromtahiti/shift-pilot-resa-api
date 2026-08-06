@@ -1,6 +1,6 @@
 const http = require("node:http");
 const { URL } = require("node:url");
-const { listTransfers, seatsLeft, bookSeats, cancelReservation } = require("./transfers");
+const { listTransfers, seatsLeft, isFull, bookSeats, cancelReservation } = require("./transfers");
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -11,7 +11,9 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === "/transfers" && req.method === "GET") {
-    return sendJson(res, 200, listTransfers().map((t) => ({
+    const availableOnly = url.searchParams.get("available") === "true";
+    const list = availableOnly ? listTransfers().filter((t) => !isFull(t)) : listTransfers();
+    return sendJson(res, 200, list.map((t) => ({
       id: t.id,
       from: t.from,
       to: t.to,

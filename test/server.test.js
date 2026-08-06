@@ -43,6 +43,18 @@ function deleteRequest(path) {
   });
 }
 
+function getJson(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${baseUrl}${path}`, { method: "GET" }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 test("POST /transfers/1/reserve → 200, seatsLeft diminue de 1", async () => {
   const res = await postJson("/transfers/1/reserve", {});
   assert.equal(res.status, 200);
@@ -111,4 +123,18 @@ test("DELETE /transfers/:wrongId/reservations/:id → 404 (transferId incorrect)
   assert.equal(del.status, 404);
   assert.equal(del.body.error, "Reservation not found");
   await deleteRequest(`/transfers/3/reservations/${book.body.reservationId}`);
+});
+
+test("GET /transfers → 200, retourne les 3 transferts", async () => {
+  const res = await getJson("/transfers");
+  assert.equal(res.status, 200);
+  assert.equal(res.body.length, 3);
+  assert.ok(res.body.every((t) => typeof t.seatsLeft === "number"));
+});
+
+test("GET /transfers?available=true → exclut les transferts complets (seatsLeft=0)", async () => {
+  const res = await getJson("/transfers?available=true");
+  assert.equal(res.status, 200);
+  assert.ok(res.body.every((t) => t.seatsLeft > 0), "tous les transferts retournés ont des places disponibles");
+  assert.ok(!res.body.find((t) => t.id === 2), "le transfert complet (id=2) est exclu");
 });
