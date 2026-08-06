@@ -6,7 +6,10 @@ Cahier des charges fonctionnel. Décrit ce que le logiciel fait, pour qui, selon
 
 ## Contexte métier
 
-Service de consultation de transferts inter-îles en Polynésie française. L'objectif : permettre aux clients (via l'application frontend `shift-pilot-resa-web`) de découvrir les trajets disponibles et leur disponibilité instantanée avant de réserver. Le système ne traite actuellement pas la réservation elle-même.
+Service de consultation et réservation de transferts inter-îles en Polynésie française. L'objectif : permettre aux clients (via l'application frontend `shift-pilot-resa-web`) de :
+1. Découvrir les trajets disponibles et leur disponibilité instantanée
+2. Réserver des sièges sur un trajet (et recevoir un identifiant de réservation)
+3. Annuler une réservation précédemment effectuée
 
 Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions d'accès (catalogue public).
 
@@ -23,8 +26,8 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 - **Non-capacité** : persistance, authentification, business logic complexe.
 
 ### Module de logique métier (`src/transfers.js`)
-- **Capacité** : fournir primitives de calcul (`seatsLeft`, `isFull`) et accès au catalogue (`listTransfers`).
-- **Constraints** : fonctions pures, déterministes, sans I/O.
+- **Capacité** : fournir primitives de calcul (`seatsLeft`, `isFull`), accès au catalogue (`listTransfers`), réservation (`bookSeats`), et annulation (`cancelReservation`).
+- **Constraints** : fonctions (quasi-)pures, déterministes, sans I/O. Side-effect limité à mutations en mémoire (`transfer.sold`, registre `reservations`).
 
 ---
 
@@ -57,6 +60,80 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 ---
 
+## Parcours utilisateur secondaire : Réserver des sièges sur un transfert [SHIAAAAAAAAAAAAAAAAAAAAAAAA-61]
+
+**Objectif** : le client immobilise N sièges sur un transfert et reçoit un identifiant de réservation unique (UUID).
+
+**Déclencheur** : client web remplissant un formulaire de réservation (non encore implémenté côté frontend, mais l'API est prête).
+
+**Déroulement** :
+
+1. Client HTTP envoie `POST /transfers/{id}/reserve` au serveur avec corps JSON optionnel `{ seats: N }` (`server.js:23-45`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reserve$/` (`server.js:23`), extrait l'ID et s'assure que la méthode est POST (`server.js:24`).
+3. Serveur accumule le corps HTTP chunk par chunk, parse le JSON, extraite valeur de `seats` avec défaut 1 si absent (`server.js:26-36`).
+4. Serveur valide que `seats` est un entier positif (≥ 1), rejette avec 400 si invalide (`server.js:37-39`).
+5. Serveur appelle `bookSeats(id, seats)` (transferts.js:25-34`).
+6. Dans `bookSeats()` :
+   - Validation `seats > 0` et `Number.isInteger(seats)` (redondante avec étape 4, mais robuste) (`transfers.js:26`).
+   - Recherche du transfert par ID (`transfers.js:27-28`), rejette 404 si non trouvé.
+   - Calcul `seatsLeft(transfer)` et vérification `seatsLeft < seats` (`transfers.js:29`), rejette 409 si capacité insuffisante.
+   - **Mutation en mémoire** : `transfer.sold += seats` (`transfers.js:30`).
+   - **Génération UUID** : `reservationId = randomUUID()` (`transfers.js:31`).
+   - **Enregistrement** : `reservations.set(reservationId, { transferId, seats })` (`transfers.js:32`).
+   - Retour `{ ok: true, reservationId, seatsLeft: seatsLeft(transfer) }` (`transfers.js:33`).
+7. Mappage résultats → réponse HTTP (`server.js:41-43`) :
+   - `reason: "not_found"` → 404 `{ error: "Transfer not found" }`
+   - `reason: "full"` → 409 `{ error: "Transfer full" }`
+   - `ok: true` → 200 `{ reservationId: UUID, transferId: id, seatsLeft: X }` [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+
+**État observé par le client** : réponse 200 JSON contenant l'UUID de réservation et les places restantes après réservation :
+
+```json
+{
+  "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "transferId": 1,
+  "seatsLeft": 27
+}
+```
+
+**Résultat** : client stocke l'UUID (en session, localStorage, état applicatif) pour annulation ultérieure.
+
+---
+
+## Parcours utilisateur tertiaire : Annuler une réservation [SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+
+**Objectif** : le client libère les places d'une réservation précédemment acceptée en fournissant son UUID.
+
+**Déclencheur** : client web cliquant « annuler ma réservation » (non encore implémenté côté frontend, mais l'API est prête).
+
+**Déroulement** :
+
+1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-54`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert (non utilisé) et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
+3. Serveur extrait `reservationId` du groupe regex 2 (`server.js:50`).
+4. Serveur appelle `cancelReservation(reservationId)` (`server.js:51`, `transfers.js:36-43`).
+5. Dans `cancelReservation()` :
+   - Recherche la réservation dans le registre Map (`reservations.get(reservationId)`) (`transfers.js:37`), rejette 404 si non trouvée.
+   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:39`).
+   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:40`).
+   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:41`).
+   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:42`).
+6. Mappage résultats → réponse HTTP (`server.js:52-53`) :
+   - `ok: false` (réservation inexistante/déjà annulée) → 404 `{ error: "Reservation not found" }`
+   - `ok: true` → 200 `{ seatsLeft: X }` (places libres après annulation)
+
+**État observé par le client** : réponse 200 JSON contenant les places libres après libération :
+
+```json
+{
+  "seatsLeft": 29
+}
+```
+
+**Résultat** : client reçoit confirmation que l'annulation a réussi ; places deviennent disponibles pour d'autres clients.
+
+---
+
 ## Ensemble de données
 
 ### Notion fondamentale : Transfert (trajet inter-îles)
@@ -69,7 +146,7 @@ Représente un trajet régulier entre deux îles, avec capacité et ventes enreg
 | `from` | chaîne | ville/île de départ | `"Papeete"` |
 | `to` | chaîne | ville/île de destination | `"Moorea"` |
 | `seats` | entier | capacité totale du trajet (places disponibles au démarrage) | `40, 60, 20` |
-| `sold` | entier | places vendues (hardcodé, jamais incrémenté dans le code source actuel) | `12, 60, 5` |
+| `sold` | entier | places vendues ; incrémenté par `bookSeats()`, décrémenté par `cancelReservation()` | `12, 60, 5` |
 | `price` | entier | prix unitaire en XPF (francs CFP polynésiens) | `3500, 21000, 1800` |
 
 Schéma implicite (pas de TypeScript, pas de validation de schéma au runtime).
@@ -83,6 +160,25 @@ Schéma implicite (pas de TypeScript, pas de validation de schéma au runtime).
 | 3 | Raiatea | Tahaa | 20 | 5 | 15 | 1800 |
 
 **Projection exposée au client** (ce que `GET /transfers` retourne) : `{ id, from, to, price, seatsLeft }` — jamais `seats` ni `sold`.
+
+### Notion secondaire : Réservation [SHIAAAAAAAAAAAAAAAAAAAAAAAA-61]
+
+Représente un immobilisation de N sièges sur un transfert, associée à un UUID unique généré à la création.
+
+| Champ | Type | Rôle | Exemple |
+|-------|------|------|---------|
+| `reservationId` | UUID | identifiant unique de la réservation (généré par `randomUUID()`) | `f47ac10b-58cc-4372-a567-0e02b2c3d479` |
+| `transferId` | entier | référence au transfert réservé | `1, 2, 3` |
+| `seats` | entier | nombre de places immobilisées | `1, 2, 5` |
+
+**Stockage** : registre Map en mémoire `reservations` (`src/transfers.js:11`), clé = UUID, valeur = `{ transferId, seats }`.
+
+**Cycle de vie** :
+1. Création : `bookSeats()` génère un UUID et enregistre dans la Map (`transfers.js:31-32`).
+2. Durée de vie : jusqu'à annulation ou redémarrage du process (volatilité).
+3. Suppression : `cancelReservation()` supprime l'entrée de la Map (`transfers.js:41`).
+
+**Réflexe de mutation** : chaque création de réservation incrémente `transfer.sold` du transfert associé ; chaque annulation le décrémente (le restaure à sa valeur pré-réservation).
 
 ---
 
@@ -124,23 +220,23 @@ L'endpoint est public. N'importe quel client HTTP peut l'appeler. Pas de vérifi
 
 ## Cas de non-fonctionnement (hors périmètre)
 
-### Réservation d'une place
-Inexistant. Aucun endpoint `POST`, `PUT`, `PATCH` ni `DELETE` n'existe. Le champ `sold` ne peut pas être incrémenté via l'API.
-
 ### Modification du catalogue
-Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:3`) réinitialisée à chaque démarrage du serveur.
+Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5`) réinitialisée à chaque démarrage du serveur.
 
 ### Persistance de réservations
-Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées.
+Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
 Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
+
+### Modification d'une réservation
+Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
 
 ---
 
 ## Comportement sur requête invalide
 
-**Toute requête qui ne correspond pas à `GET /transfers`** retourne `404 Not found` :
+**Toute requête qui ne correspond pas à une route supportée** retourne `404 Not found` :
 
 ```json
 { "error": "Not found" }
@@ -150,10 +246,16 @@ Statut HTTP : `404`. Content-Type : `application/json`.
 
 Exemples de requêtes 404 :
 - `GET /` (route invalide)
-- `GET /transfers/1` (route invalide)
-- `POST /transfers` (méthode non supportée)
-- `GET /catalogue` (route invalide)
+- `GET /transfers/1` (route invalide, pas de lecture unitaire)
+- `POST /transfers` (chemin invalide, doit être `/transfers/{id}/reserve`)
+- `GET /catalogue` (route inexistante)
+- `PATCH /transfers/1/reservations/UUID` (méthode non supportée)
 - Toute URL malformée qui parse correctement
+
+Routes supportées (non-404) :
+- `GET /transfers` — consultation catalogue
+- `POST /transfers/{id}/reserve` — réservation (avec validation `id` entier, `seats` optionnel)
+- `DELETE /transfers/{id}/reservations/{reservationId}` — annulation (avec validation `id` entier, `reservationId` UUID)
 
 **Risque d'exception non attrapée** : si l'URL est strictement non parseable (ex. caractères interdits, structure HTTP/0.9), `new URL(...)` lève une `TypeError` qui n'est pas attrapée (`server.js:11` sans try/catch). Le process Node.js crashe. Voir `CODE_HOTSPOTS_AUDIT.md`, `SECURITY_ROBUSTNESS_AUDIT.md`.
 
@@ -174,22 +276,20 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 ## Hypothèses non confirmées
 
 ### `isFull` exportée mais non câblée
-La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
+La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21-23`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
 - Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
-- Bloquer une réservation si le transfert est plein (endpoint `POST /bookings` pas encore implémenté)
 - Indicateur UI côté frontend (champ `isFull` dans la réponse)
 
 Aucune décision documentée.
 
 ### Fixture transfert plein
-Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:10` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
+Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
+
+### Validation de seats dans POST /reserve
+Le serveur valide que `seats` est un entier positif (ligne 37-39) et rejette avec 400 si non. C'est une validation côté HTTP, doublée par une validation symétrique dans `bookSeats()` (ligne 26). Stratégie prudente pour un pilote, mais en production une validation unique (soit HTTP, soit métier) suffirait.
 
 ### Synchronisation `sold` depuis un système externe
-Le champ `sold` existe mais est jamais incrémenté. Deux scénarios possibles :
-1. Un endpoint de réservation (`POST /bookings`) sera implémenté plus tard dans ce service, incrémentant `sold` en mémoire.
-2. `sold` sera synchronisé depuis un système externe (backoffice, PMS, API tierce) via un background job ou une API push.
-
-Aucun code ne préfigure l'un ou l'autre.
+Le champ `sold` est maintenant incrémenté par `bookSeats()` et décrémenté par `cancelReservation()`, mais jamais chargé depuis un système externe au démarrage. En cas de redémarrage, on revient aux valeurs hardcodées. Aucun mécanisme de chargement/synchronisation asynchrone (backoffice, PMS, base de données) n'existe.
 
 ---
 
@@ -211,8 +311,8 @@ Aucun code ne préfigure l'un ou l'autre.
 
 - **Fonctionnalité implémentée** (`GET /transfers`) : correct, cohérent avec les workflows.
 - **Séparation des responsabilités** : claire et propre (transport vs. domaine).
-- **Couverture de test** : partielle. Fonctions pures testées, serveur HTTP non testé.
+- **Couverture de test** : complète pour les endpoints HTTP. Tous les parcours testés (GET 200, POST 200/400/404/409, DELETE 200/404) via `test/server.test.js` avec serveur actif.
 - **Risques** : crash sur URL malformée, absence CORS, références mutables exposées (voir audits).
 - **Matériel d'onboarding** : workflows et audits complets et cohérents avec le code.
 
-**Résultat** : implémentation fiable pour la consultation publique, incomplet pour une API opérationnelle de réservation.
+**Résultat** : implémentation complète et testée pour consultation, réservation et annulation en mémoire. API opérationnelle pour pilote. Migration vers persistance requise pour production.

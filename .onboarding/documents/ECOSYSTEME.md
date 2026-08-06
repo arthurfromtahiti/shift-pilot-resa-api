@@ -29,11 +29,22 @@
 - **Consumé par** : aucun (formulaire absent du frontend — statut TODO SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
 - **Contrat** :
   - Requête : POST sur `${API_BASE_URL}/transfers/{id}/reserve` avec body JSON optionnel `{ seats: N }`
-  - Réponse 200 : `{ transferId: N, seatsLeft: X }`
+  - Réponse 200 : `{ transferId: N, reservationId: UUID, seatsLeft: X }` [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+  - Erreur 400 : `seats` non valide (zéro, négatif, non-entier)
   - Erreur 404 : transfert inexistant
   - Erreur 409 : plus de places disponibles
-- **Implémentation API** : `shift-pilot-resa-api/src/server.js:23–41` (route POST /transfers/:id/reserve)
-- **Usage** : réservation côté client une fois le formulaire ajouté au frontend
+- **Implémentation API** : `shift-pilot-resa-api/src/server.js:23–45` (route POST /transfers/:id/reserve)
+- **Usage** : réservation côté client ; l'UUID retourné peut être utilisé pour annulation via Endpoint 3
+- **État de maturité** : API fonctionnel (avec annulation depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-353), UI à implémenter
+
+**Endpoint 3 : DELETE /transfers/:id/reservations/:reservationId (annulation)** [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+- **Consumé par** : aucun (formulaire d'annulation absent du frontend — potentiel futur)
+- **Contrat** :
+  - Requête : DELETE sur `${API_BASE_URL}/transfers/{id}/reservations/{reservationId}` (pas de body)
+  - Réponse 200 : `{ seatsLeft: X }` (places libres après annulation)
+  - Erreur 404 : réservation inexistante ou déjà annulée
+- **Implémentation API** : `shift-pilot-resa-api/src/server.js:48–54` (route DELETE /transfers/:id/reservations/:reservationId)
+- **Usage** : annulation d'une réservation existante (via l'UUID retourné par Endpoint 2)
 - **État de maturité** : API fonctionnel, UI à implémenter
 
 ---
@@ -72,18 +83,39 @@ Transfer {
 1. Voyageur remplit formulaire réservation (transfert ID + nombre de places)
 2. Frontend émet POST /transfers/{id}/reserve avec body `{ seats: N }`
 3. API valide disponibilité, décrémente compteur `sold` en mémoire
-4. API retourne 200 avec `{ transferId, seatsLeft }` (nouvelles places libres)
-5. Frontend affiche confirmation et optionnellement rafraîchit la liste
+4. API génère UUID unique et retourne 200 avec `{ transferId, reservationId, seatsLeft }` [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+5. Frontend affiche confirmation avec UUID et optionnellement rafraîchit la liste
 6. Autres voyageurs doivent recharger manuellement la page — aucun mécanisme de rafraîchissement (polling, WebSocket) n'existe dans le code
 
 **Invariant métier** :
 - Places vendues + places libres = capacité totale (stockée comme `seatsLeft = seats - sold`)
-- Aucune réservation si places libres insuffisantes (garde dans `bookSeats()`, `src/transfers.js:24`)
+- Aucune réservation si places libres insuffisantes (garde dans `bookSeats()`, `src/transfers.js:29`)
 
 **État côté serveur** :
-- Chaque réservation décrémente le compteur du transfert
+- Chaque réservation décrémente le compteur du transfert et crée une entrée dans un registre Map (transferId, seats)
 - Redémarrage du process perd toutes les réservations (données volatile, acceptable pour pilote)
 - Pas de persistance cross-process
+
+### Flux 3 : Annulation de réservation (parcours voyageur — futur) [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+
+**Séquence (potentielle, une fois formulaire implémenté)** :
+1. Voyageur possède un UUID de réservation (reçu lors de la réservation, Flux 2 étape 4)
+2. Voyageur demande annulation (clic sur bouton « annuler ma réservation »)
+3. Frontend émet DELETE /transfers/{id}/reservations/{reservationId} (UUID dans l'URL)
+4. API valide existence de la réservation, restaure places `sold -= reservation.seats`, supprime UUID du registre
+5. API retourne 200 avec `{ seatsLeft }` (places libres après restauration)
+6. Frontend affiche confirmation d'annulation et rafraîchit la liste
+7. Places deviennent à nouveau disponibles pour les autres voyageurs
+
+**Invariant métier** :
+- Annulation restaure exactement le nombre de places réservées (inverse de Flux 2 étape 3)
+- Une annulation double retourne 404 (la réservation n'existe plus après la première suppression)
+- Aucune authentification requise (UUID seul suffit pour autoriser l'annulation)
+
+**État côté serveur** :
+- Enregistrement de réservation supprimé du registre Map
+- Compteur `transfer.sold` restauré à sa valeur pré-réservation
+- Redémarrage du process perd toutes les traces d'annulation (UUID devient invalide)
 
 ---
 
@@ -133,26 +165,10 @@ Transfer {
 - Traiter aussi les requêtes OPTIONS (preflight) si HEAD ou headers personnalisés ajoutés à l'avenir
 - Tester en intégration avec frontend sur port différent avant livraison
 
-### Risque 3 : Validation manquante sur `seats` (CRITIQUE POUR DONNÉES)
+### Risque 3 : Validation manquante sur `seats` (RÉSOLU — SHIAAAAAAAAAAAAAAAAAAAAAAAA-328)
 
-**Le problème** :
-- API accepte `seats` négatif, zéro ou absent dans POST /transfers/:id/reserve
-- Pas de vérification `Number.isInteger(seats) && seats >= 1`
-- Valeur par défaut silencieuse (`undefined → 1`) masque bugs clients
-
-**Preuve** :
-- Implémentation : `src/server.js:32` extrait `parsed.seats` sans validation
-- Fallback : `const seats = parsed.seats ?? 1` (nullish coalescing, `src/server.js:36`)
-- Risque : `POST /transfers/1/reserve body={"seats":-5}` décrémente le stock (inversé)
-
-**Impact** :
-- Stock peut descendre sous zéro (violation invariant)
-- Client mal écrit envoyant `-5` crée un overbooking caché
-- Chaîne d'intégration ne détecte le bug que si test avec valeurs négatives explicites
-
-**Recommandation** :
-- Valider et rejeter 400 si `seats` n'est pas un entier ≥ 1
-- Ajouter test de régression `POST /transfers/1/reserve body={"seats":-1}` attendant 400
+**Statut** : ✓ RÉSOLU — implémenté depuis SHIA-328  
+Validation `Number.isInteger(seats) && seats >= 1` est présente en `src/server.js:37-39` avec rejet 400 si invalide. Tests couverts (`test/transfers.test.js`). Aucune action requise.
 
 ### Risque 4 : Formulaire réservation absent du frontend (FONCTIONNEL)
 
@@ -261,9 +277,12 @@ Avant de déclarer le flux end-to-end fonctionnel :
 
 - [ ] **API GET /transfers retourne champ `availableSeats` (harmonisé nom)**
 - [ ] **API GET /transfers inclut header `Access-Control-Allow-Origin`**
-- [ ] **API POST /transfers/:id/reserve valide `seats >= 1` et rejette 400 si invalide**
+- [x] **API POST /transfers/:id/reserve valide `seats >= 1` et rejette 400 si invalide**
 - [ ] **Frontend récupère et affiche les 4 champs sans `undefined`**
 - [ ] **Test d'intégration** : appel GET depuis navigateur sur port différent, validate réponse, affichage OK
 - [ ] **Formulaire réservation implémenté** ou issue de suivi créée avec priorité documentée
+- [ ] **Formulaire annulation implémenté** (stockage UUID, appel DELETE) ou issue de suivi créée
+- [ ] **API POST /transfers/:id/reserve retourne `reservationId` (UUID)** pour utilisation en annulation
+- [ ] **API DELETE /transfers/:id/reservations/:reservationId opérationnel** (tests 200/404 passants)
 - [ ] **Documentation déploiement** : mécanique d'injection `window.API_BASE_URL` versionnée ou CI/CD décrite
 

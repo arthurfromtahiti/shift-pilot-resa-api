@@ -1,12 +1,12 @@
 # Carte des domaines — shift-pilot-resa-api
 
-> **Niveau de confiance global : medium-high.** Dépôt volontairement minimal (« pilote de test SHIFT/Paperclip », `README.md:3`) : ~80 lignes de source réparties sur deux fichiers. Toutes les affirmations ci-dessous sont `VÉRIFIÉ_CODE` (lues en source, `fichier:ligne`) ; **aucune n'est `OBSERVÉ`** — le serveur n'a pas été exécuté et aucune base n'existe (données en mémoire). Matière pauvre → carte courte et honnête, confiance donnée **par domaine**, jamais gonflée pour atteindre un quota.
+> **Niveau de confiance global : high.** Dépôt volontairement minimal (« pilote de test SHIFT/Paperclip », `README.md:3`) : ~100 lignes de source réparties sur deux fichiers. Toutes les affirmations ci-dessous sont `VÉRIFIÉ_CODE` (lues en source, `fichier:ligne`) ; **aucune n'est `OBSERVÉ`** — le serveur n'a pas été exécuté et aucune base n'existe (données en mémoire). Matière pauvre → carte courte et honnête, confiance donnée **par domaine**, jamais gonflée pour atteindre un quota.
 >
-> **Mode : RÉCONCILIATION.** Cette carte met à jour la version canonique validée (branche `onboarding/artifacts`, relue « Bon » 8/8) en la confrontant au code courant (`src/` au commit `6ef5850`, tête `532a08c`). Le drift réconcilié est détaillé en fin de document (§ « Journal de réconciliation »). En un mot : la réservation, autrefois **absente** du code, est **désormais implémentée** (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61).
+> **Mode : RÉCONCILIATION 2.** Cette carte met à jour la version précédente (après SHIAAAAAAAAAAAAAAAAAAAAAAAA-61) en la confrontant au code courant (`src/` après SHIAAAAAAAAAAAAAAAAAAAAAAAA-353, commit `1f7c5f6`). Le drift réconcilié est détaillé en fin de document (§ « Journal de réconciliation »). En un mot : l'annulation de réservation, autrefois **absente** du code, est **désormais implémentée** (SHIAAAAAAAAAAAAAAAAAAAAAAAA-353).
 
 ## Nature du projet
 
-**API HTTP de réservation de transferts inter-îles**, en Node natif (`node:http`), sans framework ni dépendance externe (`package.json`, `README.md:5-6`). Elle expose un **catalogue de transferts** (trajets Papeete↔Moorea, Papeete↔Bora Bora, Raiatea↔Tahaa) avec **prix** et **places restantes**, via une route de lecture `GET /transfers` (`src/server.js:13`), et permet désormais de **réserver des sièges** via `POST /transfers/:id/reserve` (`src/server.js:23-42`). Les données sont **codées en dur en mémoire** (`src/transfers.js:3-7`), sans persistance sur disque : la réservation **mute l'état en mémoire** (`transfer.sold`) et est perdue au redémarrage du process.
+**API HTTP de réservation de transferts inter-îles**, en Node natif (`node:http`), sans framework ni dépendance externe (`package.json`, `README.md:5-6`). Elle expose un **catalogue de transferts** (trajets Papeete↔Moorea, Papeete↔Bora Bora, Raiatea↔Tahaa) avec **prix** et **places restantes**, via une route de lecture `GET /transfers` (`src/server.js:13`), permet de **réserver des sièges** via `POST /transfers/:id/reserve` (`src/server.js:23-45`) et **d'annuler des réservations** via `DELETE /transfers/:id/reservations/:reservationId` (`src/server.js:48-54`). Les données sont **codées en dur en mémoire** (`src/transfers.js:5-9`), sans persistance sur disque : la réservation **mute l'état en mémoire** (`transfer.sold`, registre `reservations`) et est perdue au redémarrage du process.
 
 D'après le `README.md:3-4`, cette API est **consommée par `shift-pilot-resa-web`** (même projet Paperclip, dépôt séparé — hors périmètre de ce workspace), qui à ce jour n'appelle que la lecture `GET /transfers`.
 
@@ -24,63 +24,98 @@ D'après le `README.md:3-4`, cette API est **consommée par `shift-pilot-resa-we
 - **Preuves** : `src/transfers.js:3-11`, `src/server.js:13-21`.
 - **Dépend de la base** : non — données codées en dur en mémoire, aucun signal schéma/entité-étendue/code-exécutable de contenu piloté par la base.
 
-### Disponibilité et réservation des places (`disponibilite-reservation`)
+### Disponibilité, réservation et annulation de places (`disponibilite-reservation`)
 - **Catégorie** : métier
 - **Priorité** : cœur
 - **Confiance** : high
-- **Description** : Le cœur « resa » du produit : le suivi du remplissage de chaque transfert (places totales `seats` vs vendues `sold`), le calcul des places restantes / de la complétude, **et la prise de réservation** qui décrémente le stock disponible. Ce domaine porte à la fois le versant **lecture** (calcul de disponibilité affiché au client) et le versant **écriture** (réservation de N sièges avec garde de capacité). C'est le seul chemin de mutation d'état du service.
-- **Entités** : champs `seats` et `sold` du tableau `transfers` (`src/transfers.js:3-7`) ; `sold` est **le seul champ muté à l'exécution**, exclusivement par `bookSeats()` (`src/transfers.js:25`).
+- **Description** : Le cœur « resa » du produit : le suivi du remplissage de chaque transfert (places totales `seats` vs vendues `sold`), le calcul des places restantes / de la complétude, **la prise de réservation** qui décrémente le stock, **et l'annulation de réservation** qui le restaure. Ce domaine porte trois versants : **lecture** (calcul de disponibilité affiché au client), **écriture-réservation** (réservation de N sièges avec garde de capacité et génération d'UUID), et **écriture-annulation** (libération de sièges et suppression de la réservation). C'est le seul chemin de mutation d'état du service.
+- **Entités** : 
+  - champs `seats` et `sold` du tableau `transfers` (`src/transfers.js:5-9`) ; `sold` est muté par `bookSeats()` et `cancelReservation()`
+  - registre `reservations` Map (`src/transfers.js:11`) stockant `reservationId → { transferId, seats }`
 - **Routes / points d'entrée** :
-  - Lecture : `seatsLeft(transfer)` = `seats - sold` (`src/transfers.js:13-15`), exposé dans la réponse de `GET /transfers` (`src/server.js:19`) ; `isFull(transfer)` = `seatsLeft === 0` (`src/transfers.js:17-19`), **exporté mais non câblé à une route** — utilisé seulement par les tests (`test/transfers.test.js:9-12`).
-  - Écriture : `bookSeats(transferId, seats=1)` (`src/transfers.js:21-27`) → `{ ok, reason?, seatsLeft? }` ; exposé par `POST /transfers/:id/reserve` (`src/server.js:23-42`) qui mappe `reason:"not_found"` → 404, `reason:"full"` → 409, succès → 200 `{ transferId, seatsLeft }`.
-- **Indices de rattachement** : identifiants `seats`, `sold`, `seatsLeft`, `isFull`, `bookSeats`, motif de route `/transfers/:id/reserve`, mots-clés `reserve`/`book`.
-- **Types de workflows attendus** : affichage « complet / N places restantes » côté web ; prise de réservation d'un ou plusieurs sièges avec rejet si complet ; (absent) annulation de réservation (pas d'endpoint DELETE/cancel).
-- **Preuves** : `src/transfers.js:13-27`, `src/server.js:19`, `src/server.js:23-42`, `test/transfers.test.js:5-12`, `test/server.test.js:34-52`.
-- **Dépend de la base** : non — mutation purement en mémoire, non persistée ; aucun signal de contenu piloté par la base.
+  - Lecture : `seatsLeft(transfer)` = `seats - sold` (`src/transfers.js:17-19`), exposé dans `GET /transfers` (`src/server.js:19`) ; `isFull(transfer)` = `seatsLeft === 0` (`src/transfers.js:21-23`), exporté mais non câblé à une route.
+  - Écriture-réservation : `bookSeats(transferId, seats=1)` (`src/transfers.js:25-34`) → `{ ok, reason?, reservationId?, seatsLeft? }` [UPDATED] ; exposé par `POST /transfers/:id/reserve` (`src/server.js:23-45`) qui mappe `reason:"invalid_seats"` → 400, `reason:"not_found"` → 404, `reason:"full"` → 409, succès → 200 `{ reservationId, transferId, seatsLeft }`.
+  - Écriture-annulation : `cancelReservation(reservationId)` (`src/transfers.js:36-43`) [NEW] → `{ ok, reason?, seatsLeft? }` ; exposé par `DELETE /transfers/:id/reservations/:reservationId` (`src/server.js:48-54`) qui mappe `reason:"not_found"` → 404, succès → 200 `{ seatsLeft }`.
+- **Indices de rattachement** : identifiants `seats`, `sold`, `seatsLeft`, `isFull`, `bookSeats`, `cancelReservation`, `reservationId`, `reservations`, motif de route `/transfers/:id/reserve`, `/transfers/:id/reservations/:reservationId`, mots-clés `reserve`/`book`/`cancel`.
+- **Types de workflows attendus** : affichage « complet / N places restantes » côté web ; prise de réservation d'un ou plusieurs sièges avec rejet si complet ; **annulation de réservation avec récupération de l'UUID** [NEW].
+- **Preuves** : `src/transfers.js:11-43`, `src/server.js:19`, `src/server.js:23-54`, `test/transfers.test.js`, `test/server.test.js`.
+- **Dépend de la base** : non — mutations purement en mémoire, non persistées.
 
 ### Exposition HTTP de l'API (`exposition-http-api`)
 - **Catégorie** : technique
 - **Priorité** : support
 - **Confiance** : high
-- **Description** : La couche serveur transverse qui reçoit les requêtes, route sur la méthode + le chemin (y compris le paramètre dynamique `:id` de la route de réservation), lit et parse le corps JSON des requêtes POST, sérialise les réponses en JSON et gère les cas non trouvés. Transverse au métier : ne fusionne pas avec le catalogue ni la réservation.
+- **Description** : La couche serveur transverse qui reçoit les requêtes, route sur la méthode + le chemin (GET, POST, DELETE avec paramètres dynamiques `:id` et `:reservationId`), lit et parse le corps JSON des requêtes POST, sérialise les réponses en JSON et gère les cas non trouvés. Transverse au métier : ne fusionne pas avec le catalogue ni la réservation.
 - **Entités** : aucune entité métier — serveur `http.createServer` (`src/server.js:10`).
-- **Routes / points d'entrée** : helper `sendJson(res, status, body)` (`src/server.js:5-8`) ; parsing d'URL `new URL(...)` (`src/server.js:11`) ; routage par `url.pathname` + `req.method`, dont matching regex de `/transfers/(\d+)/reserve` (`src/server.js:13`, `23-24`) ; agrégation puis `JSON.parse` du corps de requête avec fallback silencieux sur corps vide/malformé (`src/server.js:26-35`) ; réponse `404 { error: "Not found" }` par défaut (`src/server.js:44`) ; port configurable `process.env.PORT || 3100` et `server.listen` (`src/server.js:47-49`) ; `module.exports = server` (`src/server.js:51`).
-- **Indices de rattachement** : `http`, `createServer`, `sendJson`, `url.pathname`, `req.method`, `req.on("data")`/`"end"`, `JSON.parse`, `PORT`, chemin `src/server.js`.
-- **Types de workflows attendus** : ajout de nouvelles routes, gestion des erreurs/statuts HTTP, parsing de corps de requête, configuration du port/déploiement.
-- **Preuves** : `src/server.js:1-51`.
+- **Routes / points d'entrée** : 
+  - Helper `sendJson(res, status, body)` (`src/server.js:5-8`)
+  - Parsing d'URL `new URL(...)` (`src/server.js:11`)
+  - Routage par `url.pathname` + `req.method` :
+    - GET `/transfers` (`src/server.js:13-21`)
+    - POST `/transfers/:id/reserve` avec matching regex (`src/server.js:23-45`) [UPDATED]
+    - DELETE `/transfers/:id/reservations/:reservationId` avec matching regex (`src/server.js:48-54`) [NEW]
+  - Agrégation du corps de requête (`src/server.js:26-28`)
+  - `JSON.parse` du corps avec fallback silencieux (`src/server.js:30-35`)
+  - Réponse `404` par défaut (`src/server.js:56`)
+  - Port configurable `process.env.PORT || 3100` et `server.listen` (`src/server.js:59-62`)
+- **Indices de rattachement** : `http`, `createServer`, `sendJson`, `url.pathname`, `req.method`, `regex` `/^\/transfers\/(\d+)\/reserve$/`, `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/`, `req.on("data")`/`"end"`, `JSON.parse`, `PORT`, chemin `src/server.js`.
+- **Types de workflows attendus** : ajout de nouvelles routes, gestion des erreurs/statuts HTTP, parsing de corps de requête, validation de paramètres d'URL, configuration du port/déploiement.
+- **Preuves** : `src/server.js:1-64`.
 - **Dépend de la base** : non.
 
 ### Qualité et tests automatisés (`qualite-tests`)
 - **Catégorie** : support
 - **Priorité** : support
-- **Confiance** : medium
-- **Description** : La suite de tests couvrant à la fois la logique métier pure (calcul des places, complétude, cardinalité du catalogue) et, désormais, le **comportement HTTP de bout en bout de la réservation** (200/404/409), via le lanceur natif `node:test`. Domaine mince mais réel ; confiance rehaussée à `medium` depuis l'ajout d'une couverture d'intégration HTTP.
+- **Confiance** : medium-high
+- **Description** : La suite de tests couvrant à la fois la logique métier pure (calcul des places, complétude, cardinalité du catalogue) et le **comportement HTTP de bout en bout des opérations CRUD** (réservation 200/409/404, **annulation 200/404**), via le lanceur natif `node:test`. Domaine mince mais réel ; confiance rehaussée depuis l'ajout d'une couverture d'intégration HTTP complète (réservation + annulation).
 - **Entités** : aucune.
-- **Routes / points d'entrée** : script `npm test` → `node --test test/*.test.js` (`package.json`) ; tests de logique pure `seatsLeft`, `isFull`, `listTransfers` (`test/transfers.test.js:5-16`) ; tests d'intégration HTTP démarrant un vrai serveur et exerçant `POST /transfers/:id/reserve` sur les 3 issues 200/409/404 (`test/server.test.js:34-52`).
+- **Routes / points d'entrée** : 
+  - Script `npm test` → `node --test test/*.test.js` (`package.json`)
+  - Tests de logique pure `seatsLeft`, `isFull`, `listTransfers`, `cancelReservation` (`test/transfers.test.js`)
+  - Tests d'intégration HTTP démarrant un vrai serveur et exerçant :
+    - `POST /transfers/:id/reserve` sur 3 issues (200/409/404) [SHIAAAAAAAAAAAAAAAAAAAAAAAA-61]
+    - `DELETE /transfers/:id/reservations/:reservationId` sur 2 issues (200/404) [SHIAAAAAAAAAAAAAAAAAAAAAAAA-353 NEW]
 - **Indices de rattachement** : chemin `test/`, `node:test`, `node:assert`, `http.request`, suffixe `.test.js`.
-- **Types de workflows attendus** : ajout de tests à la logique métier et aux routes HTTP ; (absent) test du décodage de corps JSON malformé et de la lecture `GET /transfers`.
-- **Preuves** : `test/transfers.test.js:1-16`, `test/server.test.js:1-52`, `package.json`.
+- **Types de workflows attendus** : ajout de tests à la logique métier et aux routes HTTP ; tests des workflows d'annulation de réservation.
+- **Preuves** : `test/transfers.test.js`, `test/server.test.js`, `package.json`.
 - **Dépend de la base** : non.
 
 ## Incertitudes
 
-- **Frontière `catalogue-transferts` / `disponibilite-reservation`.** Les deux domaines partagent la même entité (le tableau `transfers`). Je les garde séparés parce qu'un chef de projet nommerait distinctement « l'offre » (catalogue, prix) et « la réservation / le remplissage » (stock, prise de siège) — et l'ajout de SHIAAAAAAAAAAAAAAAAAAAAAAAA-61 renforce ce choix, la réservation étant maintenant une capacité à part entière avec sa route et sa fonction dédiées. Un relecteur pourrait légitimement préférer une fusion « Offre & réservation de transferts » ; choix signalé plutôt que tranché en silence.
-- **`isFull()` reste exporté mais mort côté runtime** (`src/transfers.js:17-19`) : toujours pas importé par `src/server.js:3` (qui importe `listTransfers`, `seatsLeft`, `bookSeats` — pas `isFull`), utilisé uniquement par `test/transfers.test.js`. La garde de complétude effective en production passe par `seatsLeft(transfer) < seats` dans `bookSeats()` (`src/transfers.js:24`), pas par `isFull()`. Facette prévue mais non exposée, ou legacy ? À noter pour l'analyse des workflows.
-- **Réservation non persistée et non authentifiée.** `bookSeats()` mute `transfer.sold` en mémoire (`src/transfers.js:25`) : un redémarrage du process réinitialise tout le stock aux valeurs codées en dur. Aucune vérification d'identité/token sur `POST /reserve`. Aucune protection contre les réservations concurrentes (pas de verrou ; deux requêtes simultanées peuvent lire le même `seatsLeft`). Acceptable en pilote, à confirmer par le board pour la suite.
-- **Corps JSON malformé silencieusement ignoré** (`src/server.js:33-35`) : un body invalide ⇒ `seats = undefined` ⇒ `bookSeats(id, 1)` (défaut). Choix délibéré ou masquage d'erreur ? À noter (relève plutôt de l'audit robustesse).
-- **Aucune donnée réelle observée.** Tout est `VÉRIFIÉ_CODE`, rien n'est `OBSERVÉ` : serveur non exécuté, données en mémoire (`src/transfers.js:3-7`), pas de base. Aucun accès base fourni à ce stade — cohérent avec l'absence de persistance.
-- **Écosystème inter-dépôts.** `README.md:3-4` désigne `shift-pilot-resa-web` comme consommateur (même projet, dépôt séparé). Le web ne consomme aujourd'hui que `GET /transfers` ; il n'appelle pas encore la nouvelle route de réservation. Hors périmètre de ce workspace ; relève de la synthèse transverse `ECOSYSTEME.md` au niveau projet.
+- **Frontière `catalogue-transferts` / `disponibilite-reservation`.** Les deux domaines partagent la même entité (le tableau `transfers`). Je les garde séparés parce qu'un chef de projet nommerait distinctement « l'offre » (catalogue, prix) et « la réservation / le remplissage » (stock, prise de siège, annulation) — et l'ajout de SHIAAAAAAAAAAAAAAAAAAAAAAAA-353 renforce ce choix, l'annulation étant maintenant aussi une capacité à part entière. Un relecteur pourrait légitimement préférer une fusion « Offre & réservation & annulation de transferts » ; choix signalé plutôt que tranché en silence.
+- **`isFull()` reste exporté mais mort côté runtime** (`src/transfers.js:21-23`) : toujours pas importé par `src/server.js:3`, utilisé uniquement par `test/transfers.test.js`. La garde de complétude effective en production passe par `seatsLeft(transfer) < seats` dans `bookSeats()` (`src/transfers.js:29`), pas par `isFull()`. Facette prévue mais non exposée, ou legacy ? À noter pour l'analyse des workflows.
+- **Annulation non persistée et non authentifiée.** `cancelReservation()` mute `transfer.sold` en mémoire et supprime l'UUID du registre Map : un redémarrage du process réinitialise tout. Aucune vérification d'identité/token sur `DELETE /reservations/:id`. Aucune protection contre les annulations concurrentes (pas de verrou ; deux requêtes simultanées peuvent tenter d'annuler le même UUID). Acceptable en pilote, à confirmer par le board pour la suite.
+- **Validation de seats dupliquée.** `src/server.js:37-39` valide que `seats > 0` et rejette 400, mais `bookSeats()` refait la même validation (ligne 26). En production, une validation unique suffirait ; cette duplication est un signal de prototypage encore en cours.
+- **UUID du client pas tracé.** `bookSeats()` génère un UUID via `randomUUID()` et le retourne au client, mais aucun lien n'existe avec le client/utilisateur qui l'a créé. Une même personne ne peut pas récupérer « ses réservations » — l'API est stateless et sans authentification.
+- **Aucune donnée réelle observée.** Tout est `VÉRIFIÉ_CODE`, rien n'est `OBSERVÉ` : serveur non exécuté, données en mémoire (`src/transfers.js:5-9`), pas de base. Aucun accès base fourni à ce stade — cohérent avec l'absence de persistance.
+- **Écosystème inter-dépôts.** `README.md:3-4` désigne `shift-pilot-resa-web` comme consommateur (même projet, dépôt séparé). Le web ne consomme aujourd'hui que `GET /transfers` ; il n'appelle pas encore les routes de réservation/annulation. Hors périmètre de ce workspace ; relève de la synthèse transverse `ECOSYSTEME.md` au niveau projet.
 
 ## Journal de réconciliation
 
-Confrontation de la carte canonique (branche `onboarding/artifacts`, SHA `d869b94`, pré-SHIAAAAAAAAAAAAAAAAAAAAAAAA-61) au code courant (`src/` au commit `6ef5850`) :
+### Phase 1 : SHIAAAAAAAAAAAAAAAAAAAAAAAA-61 (réservation)
+Confrontation de la carte canonique (branche `onboarding/artifacts`, SHA `d869b94`) au code post-61 (commit `06b7594`) :
 
-| Élément | Avant (carte canonique) | Après (code courant) | Action |
+| Élément | Avant | Après | Action |
 |---|---|---|---|
-| Chemin d'écriture de réservation | **Absent** — « le nom *resa* n'est pas honoré par le code » (incertitude centrale) | `bookSeats()` + `POST /transfers/:id/reserve` implémentés | Incertitude **résolue** ; domaine réservation matérialisé |
-| Domaine `disponibilite-places` | métier / cœur / **medium** (car `sold` jamais incrémenté) | Renommé `disponibilite-reservation`, gagne le versant écriture | Confiance **medium → high** |
-| Domaine `exposition-http-api` | routage GET + 404 seulement | Ajout matching regex `:id`, parsing corps JSON POST | Preuves & description **étendues** |
-| Domaine `qualite-tests` | **low** — « aucune couverture HTTP » | `test/server.test.js` couvre 200/404/409 en intégration HTTP | Confiance **low → medium** |
-| Nombre de domaines | 4 | 4 | Inchangé (réservation fusionnée à la disponibilité, même entité) |
+| Chemin d'écriture de réservation | **Absent** | `bookSeats()` + `POST /transfers/:id/reserve` implémentés | Incertitude **résolue** |
+| Domaine `disponibilite-places` | métier / cœur / **medium** | Renommé `disponibilite-reservation`, gagne versant écriture | Confiance **medium → high** |
+| Retour de `bookSeats()` | `{ ok, reason?, seatsLeft? }` | `{ ok, reason?, reservationId?, seatsLeft? }` | Réponse **enrichie** |
+| Domaine `exposition-http-api` | GET + 404 | GET + POST + 404 | Preuves **étendues** |
+| Domaine `qualite-tests` | **low** | `test/server.test.js` POST couvre 200/404/409 | Confiance **low → medium** |
 
-Les autres constats de la carte canonique (nature du projet, catalogue, absence de base, écosystème) restent valides et sont conservés.
+### Phase 2 : SHIAAAAAAAAAAAAAAAAAAAAAAAA-353 (annulation) ← **CETTE RÉCONCILIATION**
+Confrontation de la carte post-61 (commit `06b7594`) au code courant (commit `1f7c5f6`) :
+
+| Élément | Avant (post-61) | Après (post-353) | Action |
+|---|---|---|---|
+| Chemin d'annulation de réservation | **Absent** | `cancelReservation()` + `DELETE /transfers/:id/reservations/:reservationId` | Capability **ajoutée** |
+| Domaine `disponibilite-reservation` | réservation uniquement | réservation **+ annulation** | Description **enrichie** |
+| Registre `reservations` | Absent | `Map { reservationId → { transferId, seats } }` | Data structure **ajoutée** |
+| Validation `seats` | Côté server seulement | Côté server **+ transfers.js** | Validation **dupliquée** (prototypage) |
+| Imports de transfers.js | `listTransfers`, `seatsLeft`, `bookSeats` | + `cancelReservation` | Exports **étendus** |
+| Routes HTTP | GET `/transfers`, POST `/transfers/:id/reserve` | + DELETE `/transfers/:id/reservations/:reservationId` | Routage **étendu** |
+| Domaine `qualite-tests` | medium (POST couverts) | **medium-high** (POST + DELETE couverts) | Confiance **medium → medium-high** |
+| Nombre de domaines | 4 | 4 | Inchangé |
+| Niveau de confiance global | medium-high | **high** | Implémentation plus complète & testée |
+
+Les autres constats (nature du projet, catalogue, absence de base, écosystème) restent valides et sont conservés.
