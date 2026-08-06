@@ -4,15 +4,15 @@
 
 ## Compréhension globale
 
-Le service est un pilote de démonstration sans aucune couche de sécurité. Les risques sont réels mais assumés pour ce contexte. Le constat le plus sérieux est un **bug fonctionnel avec impact sécurité** : le paramètre `seats` n'est pas validé comme entier positif, ce qui permet de créer des places de nulle part en passant une valeur négative. Ce bug est démontrable par lecture du code seul, sans exécution.
+Le service est un pilote de démonstration sans aucune couche de sécurité. Les risques sont réels mais assumés pour ce contexte. L'audit initial avait identifié un **bug fonctionnel avec impact sécurité** : le paramètre `seats` non validé permettait de créer des places inexistantes en passant une valeur négative. **Ce bug a depuis été corrigé** : une validation double couche (`Number.isInteger` et `>= 1`) est maintenant en place dans `src/server.js:37-39` et `src/transfers.js:26`. Les risques résiduels (authentification, CORS, race condition) sont des limitations de conception assumées pour ce pilote.
 
 ## Résumé exécutif
 
-L'audit identifie cinq points de risque. Un seul est un **bug reproductible immédiatement** : `seats` peut être négatif, ce qui bypasse la garde de capacité et diminue le compteur `sold` (`src/transfers.js:24-25`). Les quatre autres sont des limitations de conception qui sont documentées comme intentionnelles pour un pilote : absence d'authentification, absence de CORS, race condition sur les réservations concurrentes, et parsing JSON silencieux. Le bug sur `seats` négatif est le seul qui devrait être corrigé avant tout accès externe au service, même en phase de test, car il permet à un appelant de manipuler le stock à sa guise.
+L'audit a identifié cinq points de risque. **Le bug critique — `seats` pouvant être négatif, bypassant la garde de capacité et décrémentant `sold` — a depuis été corrigé** : `src/server.js:37-39` et `src/transfers.js:26` valident désormais `seats` comme entier ≥ 1 dans les deux couches, avec retour 400 (HTTP) ou `{ ok: false, reason: "invalid_seats" }` (métier) pour toute valeur invalide. Les quatre autres points restent des limitations de conception documentées comme intentionnelles pour un pilote : absence d'authentification, absence de CORS, race condition sur les réservations concurrentes, et parsing JSON silencieux.
 
 ## Constats détaillés
 
-**Bug : `seats` non validé comme entier positif (`VÉRIFIÉ_CODE`)** : Dans `src/transfers.js:21-27`, `bookSeats(transferId, seats=1)` reçoit `seats` depuis l'appelant. La seule garde en place est `if (seatsLeft(transfer) < seats)` (ligne 24). Si `seats = -1` : `seatsLeft(transfer)` vaut par exemple 28, et `28 < -1` est `false` → la garde ne se déclenche pas. Ensuite, `transfer.sold += seats` exécute `transfer.sold += -1`, **diminuant** le compteur de sièges vendus. La fonction retourne `{ ok: true, seatsLeft: seatsLeft(transfer) }` avec une valeur de `seatsLeft` augmentée. Effet : un appelant malveillant peut créer des places inexistantes en boucle, jusqu'à ramener `sold` à zéro ou en dessous. Le même raisonnement s'applique à `seats = 0` (opération nulle, retourne 200 sans effets mais sans erreur) et `seats = 0.5` (mutation non entière du compteur). La valeur `seats` arrive de l'appelant HTTP via `src/server.js:36` : `bookSeats(id, seats ?? 1)` où `seats` est issu du JSON parsé sans validation de type (`src/server.js:29-35`).
+**`seats` validé comme entier positif (`CORRIGÉ`)** : Ce bug a été corrigé. Une double validation est désormais en place : `src/server.js:37-39` (`!Number.isInteger(seatsValue) || seatsValue < 1`) retourne un 400 avant tout appel métier, et `src/transfers.js:26` (`!Number.isInteger(seats) || seats < 1`) retourne `{ ok: false, reason: "invalid_seats" }` comme garde de secours. Les valeurs `seats = -1`, `seats = 0` et `seats = 0.5` sont toutes rejetées dans les deux couches. *Contexte historique :* la seule garde initiale était `if (seatsLeft(transfer) < seats)` dans `bookSeats` — insuffisante car `28 < -1` est `false`, permettant `transfer.sold += -1` et la création de places inexistantes.
 
 **Absence d'authentification (`VÉRIFIÉ_CODE`)** : `POST /transfers/:id/reserve` (`src/server.js:23-42`) n'exige aucun token, aucune session, aucun header d'autorisation. N'importe quel client peut réserver autant de sièges qu'il le souhaite, autant de fois qu'il le souhaite, sans identité. Sur un pilote de démonstration à accès restreint, c'est acceptable ; sur un environnement accessible via réseau, c'est une surface d'abus directe.
 
@@ -31,23 +31,23 @@ L'audit identifie cinq points de risque. Un seul est un **bug reproductible imm�
 
 ## Dettes techniques
 
-- **`seats` non validé** : absence de toute vérification que `seats` est un entier ≥ 1 (`src/server.js:29-35`, `src/transfers.js:21-27`). La fonction `bookSeats` reçoit des valeurs qu'elle ne devrait pas accepter.
+- **`seats` validé** (`CORRIGÉ`) : la vérification `Number.isInteger` et `>= 1` est en place dans `src/server.js:37-39` et `src/transfers.js:26`. La dette technique initiale sur ce point a été résolue.
 - **Absence de headers de sécurité HTTP** : pas de `CORS`, pas de `X-Content-Type-Options`, pas de `Content-Security-Policy`. Pour un pilote de démonstration, c'est hors périmètre ; pour toute exposition publique, ce serait un prérequis.
 
 ## Zones critiques
 
-- **`src/transfers.js:21-27` (`bookSeats`)** : c'est ici que le bug `seats` négatif se concrétise. La garde de capacité `seatsLeft < seats` est la seule protection contre des mutations aberrantes du stock — et elle est insuffisante.
-- **`src/server.js:29-36`** (parsing et propagation de `seats`) : c'est le point d'entrée de la valeur non validée.
+- **`src/transfers.js:21-27` (`bookSeats`)** : la validation de `seats` est désormais assurée en ligne 26 (`!Number.isInteger(seats) || seats < 1`). La garde de capacité `seatsLeft < seats` (ligne 29) constitue la protection suivante contre les débordements normaux.
+- **`src/server.js:37-39`** (validation de `seats` en couche HTTP) : la validation est appliquée avant tout appel à `bookSeats` ; toute valeur non entière ou inférieure à 1 retourne immédiatement un 400.
 
 ## Risques
 
-- **Bug immédiatement exploitable : `seats` négatif ou nul** — un appelant passe `{ "seats": -1 }` en body POST, la réservation aboutit avec 200, et `transfer.sold` décroît de 1 (libérant un siège inexistant). Reproduisible par lecture du code (`src/transfers.js:24-25`). Impact : manipulation du stock à volonté par n'importe quel appelant. Gravité : **critique pour toute exposition réseau**, même dans un pilote.
+- **`seats` négatif ou nul — `CORRIGÉ`** : ce risque a été éliminé. `src/server.js:37-39` et `src/transfers.js:26` rejettent désormais toute valeur non entière ou inférieure à 1 — un appelant passant `{ "seats": -1 }` reçoit un 400 et `transfer.sold` n'est pas muté.
 - **Absence de CORS bloquant l'intégration frontend** : le frontend web ne peut pas appeler l'API depuis un domaine/port différent sans que le navigateur bloque la requête. Fonctionnalité actuellement non utilisable depuis le web. Impact fonctionnel, pas de sécurité.
 - **Réservations illimitées sans authentification** : accès anonyme à la mutation de stock — `VÉRIFIÉ_CODE`, assumé pour le pilote.
 
 ## Recommandations priorisées
 
-1. **Valider `seats` dans `bookSeats` ou dans `src/server.js`** avant tout accès externe, même de test : ajouter `if (typeof seats !== 'number' || !Number.isInteger(seats) || seats < 1)` et retourner une erreur 400 — `src/server.js:29-36` ou `src/transfers.js:21`. Priorité : **haute** (bug, pas choix de conception).
+1. **Valider `seats` dans `bookSeats` ou dans `src/server.js`** — **`FAIT`** : `src/server.js:37-39` retourne un 400 pour toute valeur non entière ou `< 1`, et `src/transfers.js:26` applique la même contrainte en couche métier.
 2. **Ajouter les headers CORS** (`Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`) dans `sendJson` ou dans un middleware dédié — `src/server.js:5-8`. Priorité : haute (bloque l'intégration frontend).
 3. **Authentification** avant toute montée en charge ou accès public — hors périmètre pilote, mais doit figurer dans la roadmap.
 

@@ -103,3 +103,12 @@ test("DELETE /transfers/3/reservations/unknown → 404", async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.error, "Reservation not found");
 });
+
+test("DELETE /transfers/:wrongId/reservations/:id → 404 (transferId incorrect)", async () => {
+  const book = await postJson("/transfers/3/reserve", {});
+  assert.equal(book.status, 200);
+  const del = await deleteRequest(`/transfers/1/reservations/${book.body.reservationId}`);
+  assert.equal(del.status, 404);
+  assert.equal(del.body.error, "Reservation not found");
+  await deleteRequest(`/transfers/3/reservations/${book.body.reservationId}`);
+});

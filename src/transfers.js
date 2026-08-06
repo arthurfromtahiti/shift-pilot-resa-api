@@ -33,9 +33,10 @@ function bookSeats(transferId, seats = 1) {
   return { ok: true, reservationId, seatsLeft: seatsLeft(transfer) };
 }
 
-function cancelReservation(reservationId) {
+function cancelReservation(reservationId, transferId) {
   const reservation = reservations.get(reservationId);
   if (!reservation) return { ok: false, reason: "not_found" };
+  if (reservation.transferId !== transferId) return { ok: false, reason: "not_found" };
   const transfer = transfers.find((t) => t.id === reservation.transferId);
   transfer.sold -= reservation.seats;
   reservations.delete(reservationId);
