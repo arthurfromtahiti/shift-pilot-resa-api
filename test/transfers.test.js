@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { listTransfers, seatsLeft, isFull } = require("../src/transfers");
+const { listTransfers, seatsLeft, isFull, bookSeats } = require("../src/transfers");
 
 test("seatsLeft calcule les places restantes", () => {
   assert.equal(seatsLeft({ seats: 40, sold: 12 }), 28);
@@ -13,4 +13,11 @@ test("isFull detecte un transfert complet", () => {
 
 test("listTransfers retourne les 3 transferts", () => {
   assert.equal(listTransfers().length, 3);
+});
+
+test("bookSeats rejette seats non entier positif", () => {
+  assert.deepEqual(bookSeats(1, 0), { ok: false, reason: "invalid_seats" });
+  assert.deepEqual(bookSeats(1, -1), { ok: false, reason: "invalid_seats" });
+  assert.deepEqual(bookSeats(1, 1.5), { ok: false, reason: "invalid_seats" });
+  assert.deepEqual(bookSeats(1, "2"), { ok: false, reason: "invalid_seats" });
 });
