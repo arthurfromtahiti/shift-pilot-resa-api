@@ -33,7 +33,11 @@ const server = http.createServer((req, res) => {
       } catch {
         seats = undefined;
       }
-      const result = bookSeats(id, seats ?? 1);
+      const seatsValue = seats ?? 1;
+      if (!Number.isInteger(seatsValue) || seatsValue < 1) {
+        return sendJson(res, 400, { error: "seats must be a positive integer" });
+      }
+      const result = bookSeats(id, seatsValue);
       if (result.reason === "not_found") return sendJson(res, 404, { error: "Transfer not found" });
       if (result.reason === "full") return sendJson(res, 409, { error: "Transfer full" });
       return sendJson(res, 200, { transferId: id, seatsLeft: result.seatsLeft });
