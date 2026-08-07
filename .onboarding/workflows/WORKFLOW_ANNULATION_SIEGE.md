@@ -23,17 +23,17 @@ Permettre à un client web d'annuler une réservation précédemment acceptée, 
 
 ## Points d'entrée
 
-- `DELETE /transfers/:id/reservations/:reservationId` — `src/server.js:48-49` (regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/`, méthode DELETE)
-- Paramètre d'URL `:id` : entier capturé par `(\d+)` (transferId, actuellement **non utilisé** en validation)
+- `DELETE /transfers/:id/reservations/:reservationId` — `src/server.js:50-56` (regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/`, méthode DELETE)
+- Paramètre d'URL `:id` : entier capturé par `(\d+)` (transferId, présent dans l'URL pour cohérence API mais **non extrait** depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-456)
 - Paramètre d'URL `:reservationId` : UUID capturé par `([^/]+)` (groupe 2), passé directement à `cancelReservation()`
 
 ## Étapes principales
 
 1. Le serveur HTTP `http.createServer` reçoit la requête (`src/server.js:10`).
 2. L'URL est parsée : `new URL(req.url, "http://" + req.headers.host)` (`src/server.js:11`).
-3. Le routage teste le regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` sur `url.pathname` **et** `req.method === "DELETE"` (`src/server.js:48-49`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:56`).
-4. L'UUID est extrait : `const reservationId = cancelMatch[2]` (`src/server.js:50`).
-5. `cancelReservation(reservationId)` est appelé directement (`src/server.js:51`).
+3. Le routage teste le regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` sur `url.pathname` **et** `req.method === "DELETE"` (`src/server.js:50`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:58`).
+4. L'UUID est extrait : `const reservationId = cancelMatch[2]` (`src/server.js:52`).
+5. `cancelReservation(reservationId)` est appelé directement (`src/server.js:53`), **sans le transferId** (extrait d'URL mais non utilisé depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-456).
 6. Dans `cancelReservation(reservationId)` (`src/transfers.js:36-43`) :
    - Recherche `reservations.get(reservationId)` pour retrouver la réservation (ligne 37)
    - Si non trouvée : retourne `{ ok: false, reason: "not_found" }`
@@ -41,7 +41,7 @@ Permettre à un client web d'annuler une réservation précédemment acceptée, 
    - **Libère les places** : `transfer.sold -= reservation.seats` (ligne 40) — opération **inverse** de bookSeats
    - Supprime l'entrée du registre : `reservations.delete(reservationId)` (ligne 41)
    - Retourne `{ ok: true, seatsLeft: seatsLeft(transfer) }` (ligne 42)
-7. Mappage résultat → réponse HTTP (`src/server.js:52-53`) :
+7. Mappage résultat → réponse HTTP (`src/server.js:54-55`) :
    - `ok: false` (réservation inexistante) → `sendJson(res, 404, { error: "Reservation not found" })`
    - `ok: true` → `sendJson(res, 200, { seatsLeft: result.seatsLeft })`
 
@@ -72,17 +72,18 @@ Aucune intégration externe explicite visible. Toute la logique est in-process e
 - **Perte totale de données au redémarrage** (`VÉRIFIÉ_CODE`) : `reservations` Map est in-memory (`src/transfers.js:11`). Un redémarrage du process la vide complètement. Les UUIDs générés lors des réservations précédentes deviennent invalides.
 - **Pas d'authentification** : n'importe quel appelant HTTP peut annuler n'importe quelle réservation s'il connaît son UUID. Aucun lien entre le client et la réservation ; l'UUID est l'unique secret.
 - **Validité de l'UUID au redémarrage** : si le client stocke un UUID et redémarre l'API entre la réservation et l'annulation, l'UUID est perdu. Une tentative d'annulation retourne 404.
-- **Inversion de mutation partielle** : si un bug lie un UUID à un `transferId` inexistant, `transfers.find()` ligne 39 retourne `undefined` → crash (TypeError: cannot read property 'sold' of undefined). Le code n'a pas de garde.
+- **Absence de validation de cohérence `transferId/reservationId`** (`SHIAAAAAAAAAAAAAAAAAAAAAAAA-456 deliberate simplification`) : le paramètre `:id` dans l'URL est accepté mais non utilisé. Aucune vérification ne garantit que la réservation trouvée appartient au transfert désigné par `:id`. Un appel `DELETE /transfers/1/reservations/<uuid-d'un-autre-transfert>` supprimera la réservation de l'autre transfert. Cette simplification a été deliberée : le Map `reservations` retrouve la réservation par UUID seul, donc le `transferId` dans l'URL est redondant.
 
 ## Questions ouvertes
 
 - La double annulation (idempotence) est-elle un cas à supporter ? Faut-il retourner 200 (succès idempotent) ou 404 (non trouvé) ?
 - L'absence de lien client→réservation est-elle intentionnelle ? Faut-il demander un token/identifiant au moment de l'annulation pour vérifier l'ownership ?
 - En cas de redémarrage du process, comment le frontend récupère-t-il une réservation perdue (dont l'UUID n'a plus de sens) ? Existe-t-il un fallback ?
+- L'absence de validation transferId/reservationId (depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-456) est-elle acceptable ? Un client mal intentionné pourrait annuler une réservation depuis un URI `/transfers/X/reservations/Y` où Y n'appartient pas à X.
 
 ## Preuves
 
-- `src/server.js:48-54` — routage DELETE, extraction UUID, appel `cancelReservation`, mappage résultats → statuts HTTP
+- `src/server.js:50-56` — routage DELETE, extraction UUID, appel `cancelReservation`, mappage résultats → statuts HTTP
 - `src/transfers.js:36-43` — `cancelReservation()` : recherche Map, validation, libération `transfer.sold`, suppression Map, retour
 - `src/transfers.js:11` — `reservations` Map (registre de suivi)
 - `src/transfers.js:17-19` — `seatsLeft(transfer)` (utilisé pour calculer le retour)

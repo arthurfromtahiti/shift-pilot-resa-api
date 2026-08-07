@@ -110,7 +110,7 @@ Transfer {
 **Invariant métier** :
 - Annulation restaure exactement le nombre de places réservées (inverse de Flux 2 étape 3)
 - Une annulation double retourne 404 (la réservation n'existe plus après la première suppression)
-- Aucune authentification requise (pas de token/session) ; la cohérence est vérifiée : le `:id` de transfert dans l'URL doit correspondre au transfert propriétaire de la réservation — sinon 404 (SHIA-396)
+- Aucune authentification requise (pas de token/session) ; **depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-456, la validation de cohérence transferId/reservationId n'est plus effectuée** : le paramètre `:id` dans l'URL n'est plus utilisé pour valider l'appartenance de la réservation au transfert (simplification intentionnelle)
 
 **État côté serveur** :
 - Enregistrement de réservation supprimé du registre Map
