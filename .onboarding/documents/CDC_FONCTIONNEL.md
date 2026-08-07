@@ -108,18 +108,19 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 **Déroulement** :
 
-1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-54`).
-2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert (non utilisé) et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
-3. Serveur extrait `reservationId` du groupe regex 2 (`server.js:50`).
-4. Serveur appelle `cancelReservation(reservationId)` (`server.js:51`, `transfers.js:36-43`).
+1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-55`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
+3. Serveur extrait `transferId` et `reservationId` (`server.js:50-51`).
+4. Serveur appelle `cancelReservation(reservationId, transferId)` (`server.js:52`, `transfers.js:36-44`) avec les deux paramètres.
 5. Dans `cancelReservation()` :
    - Recherche la réservation dans le registre Map (`reservations.get(reservationId)`) (`transfers.js:37`), rejette 404 si non trouvée.
-   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:39`).
-   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:40`).
-   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:41`).
-   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:42`).
-6. Mappage résultats → réponse HTTP (`server.js:52-53`) :
-   - `ok: false` (réservation inexistante/déjà annulée) → 404 `{ error: "Reservation not found" }`
+   - **Valide cohérence** [SHIA-396] : vérifie que `reservation.transferId === transferId` (`transfers.js:39`), rejette 404 si incohérent (protection contre les IDs mal appairés).
+   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:40`).
+   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:41`).
+   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:42`).
+   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:43`).
+6. Mappage résultats → réponse HTTP (`server.js:53-54`) :
+   - `ok: false` (réservation inexistante/déjà annulée OU transferId incohérent) → 404 `{ error: "Reservation not found" }`
    - `ok: true` → 200 `{ seatsLeft: X }` (places libres après annulation)
 
 **État observé par le client** : réponse 200 JSON contenant les places libres après libération :
@@ -227,7 +228,7 @@ Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5
 Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
-Le client peut optionnellement demander « uniquement les transferts avec places disponibles » via le paramètre de requête `?available=true` (`server.js:14-15`). Sans ce paramètre, tous les transferts sont retournés. [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+Pas implémenté. L'endpoint GET /transfers retourne toujours le catalogue complet, y compris les transferts complets (`seatsLeft: 0`). Un filtrage côté client ou une future extension côté serveur avec un paramètre (ex. `?available=true`) resterait du travail futur.
 
 ### Modification d'une réservation
 Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
@@ -275,8 +276,8 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 
 ## Hypothèses non confirmées
 
-### `isFull` câblée au filtrage disponibilité
-La fonction `isFull(transfer)` est définie, exportée et utilisée pour implémenter le filtrage `?available=true` (`src/server.js:15` — `!isFull(t)` sélectionne les transferts avec places disponibles). Elle n'est pas exposée dans la réponse HTTP. [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+### `isFull` définie mais non utilisée
+La fonction `isFull(transfer)` est définie (`transfers.js:21-23`) et exportée, mais n'est pas actuellement utilisée dans `server.js`. Elle a probablement été préparée pour un futur filtrage côté serveur (ex. `?available=true`), mais le filtrage n'est pas implémenté.
 
 ### Fixture transfert plein
 Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.

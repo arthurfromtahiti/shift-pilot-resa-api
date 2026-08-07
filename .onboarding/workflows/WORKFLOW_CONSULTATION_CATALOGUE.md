@@ -65,7 +65,7 @@ Permettre à un client web de récupérer la liste complète des transferts inte
 ## Questions ouvertes
 
 - Le frontend `shift-pilot-resa-web` utilise-t-il `seatsLeft` ou `availableSeats` ? `documents/ECOSYSTEME.md:14-22` signale que le frontend accède à `t.availableSeats`, mais le code frontend n'est pas dans ce workspace — la divergence reste à confirmer sur le dépôt `shift-pilot-resa-web`.
-- `isFull()` est exporté par `src/transfers.js:17-19` mais n'est **pas importé** par `src/server.js:3` et n'intervient pas dans ce workflow. Est-il prévu pour une future route `/transfers?available=true` ?
+- `isFull()` est exporté par `src/transfers.js:21-23` mais n'est pas utilisé dans `src/server.js`. Aucun filtrage côté serveur n'est implémenté actuellement (la fonction est anticipation pour une future extension).
 - Aucun test HTTP n'existe pour `GET /transfers`. Un test de non-régression est-il prévu ?
 
 ## Preuves

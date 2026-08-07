@@ -84,7 +84,7 @@ function isFull(transfer) {
 - **Sortie** : boolean
 - **Sémantique** : prédicat « transfert complet »
 - **Side-effect** : non
-- **Usage** : appelée par server.js:15 (filtrage optionnel du GET /transfers avec `?available=true`)
+- **Usage** : exporté, actuellement non utilisé dans server.js (réservé pour filtrage futur)
 
 #### bookSeats(transferId, seats=1) — Ligne 25-34 [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
 ```javascript
@@ -125,11 +125,12 @@ function bookSeats(transferId, seats = 1) {
 - **Usage** : appelée par server.js:40 (endpoint POST /transfers/:id/reserve)
 - **Validation** : `seats > 0` et `Number.isInteger(seats)` (rejet si zéro ou négatif)
 
-#### cancelReservation(reservationId) — Ligne 36-43 [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+#### cancelReservation(reservationId, transferId) — Ligne 36-44 [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353, UPDATED SHIA-396]
 ```javascript
-function cancelReservation(reservationId) {
+function cancelReservation(reservationId, transferId) {
   const reservation = reservations.get(reservationId);
   if (!reservation) return { ok: false, reason: "not_found" };
+  if (reservation.transferId !== transferId) return { ok: false, reason: "not_found" };
   const transfer = transfers.find((t) => t.id === reservation.transferId);
   transfer.sold -= reservation.seats;
   reservations.delete(reservationId);
@@ -138,23 +139,25 @@ function cancelReservation(reservationId) {
 ```
 - **Entrée** :
   - `reservationId` : string (UUID de la réservation à annuler)
+  - `transferId` : number (ID du transfert, pour validation de cohérence)
 - **Sortie** :
   ```
   { ok: true, seatsLeft: number }      // Annulation réussie
-  { ok: false, reason: "not_found" }   // Réservation inexistante
+  { ok: false, reason: "not_found" }   // Réservation inexistante OU transferId incohérent
   ```
 - **Logique** :
   1. Recherche réservation dans la Map (line 37)
   2. Retourne erreur si NOT FOUND (line 38)
-  3. Récupère le transfert associé (line 39)
-  4. Libère les places : `transfer.sold -= reservation.seats` (line 40) — **INVERSE de bookSeats**
-  5. Supprime l'entrée de la Map (line 41)
-  6. Retourne succès avec places restantes après libération (line 42)
+  3. **Valide cohérence** : vérifie que `reservation.transferId === transferId` (line 39) — **[SHIA-396]** rejette si incohérent
+  4. Récupère le transfert associé (line 40)
+  5. Libère les places : `transfer.sold -= reservation.seats` (line 41) — **INVERSE de bookSeats**
+  6. Supprime l'entrée de la Map (line 42)
+  7. Retourne succès avec places restantes après libération (line 43)
 - **Side-effect** :
   - MÀJ `transfer.sold -= reservation.seats` (restaure l'état)
   - Suppression entrée dans `reservations` Map
-- **Usage** : appelée par server.js:51 (endpoint DELETE /transfers/:id/reservations/:reservationId)
-- **Sémantique** : opération inverse et réversible de `bookSeats()`
+- **Usage** : appelée par server.js:52 (endpoint DELETE /transfers/:id/reservations/:reservationId)
+- **Sémantique** : opération inverse et réversible de `bookSeats()` ; la garde transferId empêche l'annulation d'une réservation via un mauvais transfert
 
 ### Données — Catalogue initial
 
@@ -202,10 +205,10 @@ module.exports = server;
 
 #### Imports — Ligne 1-3
 ```javascript
-const { listTransfers, seatsLeft, isFull, bookSeats, cancelReservation } = require("./transfers");
+const { listTransfers, seatsLeft, bookSeats, cancelReservation } = require("./transfers");
 ```
-- Importe 5 fonctions du module transfers
-  - `listTransfers`, `seatsLeft`, `isFull` : lecture et filtrage (ajout SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)
+- Importe 4 fonctions du module transfers
+  - `listTransfers`, `seatsLeft` : lecture et calcul disponibilité
   - `bookSeats` : réservation (ajout SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
   - `cancelReservation` : annulation (ajout SHIAAAAAAAAAAAAAAAAAAAAAAAA-353)
 
@@ -221,12 +224,10 @@ function sendJson(res, status, body) {
 - **Rôle** : factoriser Content-Type + sérialisation JSON
 - **Usage** : appelée 8x (GET 200 ligne 16, POST 400 ligne 40, POST 404 ligne 43, POST 409 ligne 44, POST 200 ligne 45, DELETE 404 ligne 54, DELETE 200 ligne 55, catch-all 404 ligne 58)
 
-#### Route : GET /transfers — Ligne 13-23 [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+#### Route : GET /transfers — Ligne 13-21
 ```javascript
 if (url.pathname === "/transfers" && req.method === "GET") {
-  const availableOnly = url.searchParams.get("available") === "true";
-  const list = availableOnly ? listTransfers().filter((t) => !isFull(t)) : listTransfers();
-  return sendJson(res, 200, list.map((t) => ({
+  return sendJson(res, 200, listTransfers().map((t) => ({
     id: t.id,
     from: t.from,
     to: t.to,
@@ -236,17 +237,13 @@ if (url.pathname === "/transfers" && req.method === "GET") {
 }
 ```
 - **Condition** : exact match "/transfers" + méthode GET
-- **Paramètre optionnel** : `?available=true` (défaut : tous les transferts)
 - **Traitement** :
-  1. Extrait paramètre `available` : `url.searchParams.get("available") === "true"` (ligne 14)
-  2. Appel `listTransfers()` → catalogue brut (ligne 15)
-  3. Si `available === true` : filtre `.filter(t => !isFull(t))` pour garder seulement les transferts avec places disponibles (ligne 15)
-  4. Map projection `{ id, from, to, price, seatsLeft }` (lignes 16-22)
-  5. Appel `seatsLeft(t)` pour chaque (calcul in-transit)
-  6. Sérialise en JSON + 200
-- **Réponse** : toujours 200 (pas d'erreur prévue)
+  1. Appel `listTransfers()` → catalogue complet (ligne 14)
+  2. Map projection `{ id, from, to, price, seatsLeft }` (lignes 15-20)
+  3. Appel `seatsLeft(t)` pour chaque (calcul in-transit)
+  4. Sérialise en JSON + 200
+- **Réponse** : toujours 200 (pas d'erreur prévue) ; retourne **tous les transferts**, y compris ceux complets
 - **Projection masque** : `seats`, `sold` (données internes)
-- **Sémantique du filtre** : `isFull()` retourne true quand `seatsLeft === 0`, donc `!isFull()` sélectionne les transferts avec `seatsLeft > 0`
 
 #### Route : POST /transfers/:id/reserve — Ligne 25-48
 ```javascript
@@ -336,40 +333,49 @@ req.on("end", () => {
 ```
 - Termine précocement après avoir écrit la réponse (évite de continuer après)
 
-#### Route : DELETE /transfers/:id/reservations/:reservationId — Ligne 50-56 [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353, UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-456]
+#### Route : DELETE /transfers/:id/reservations/:reservationId — Ligne 48-55 [NEW SHIAAAAAAAAAAAAAAAAAAAAAAAA-353, UPDATED SHIA-396]
 ```javascript
 const cancelMatch = url.pathname.match(/^\/transfers\/(\d+)\/reservations\/([^/]+)$/);
 if (cancelMatch && req.method === "DELETE") {
+  const transferId = parseInt(cancelMatch[1], 10);
   const reservationId = cancelMatch[2];
-  const result = cancelReservation(reservationId);
+  const result = cancelReservation(reservationId, transferId);
   if (!result.ok) return sendJson(res, 404, { error: "Reservation not found" });
   return sendJson(res, 200, { seatsLeft: result.seatsLeft });
 }
 ```
 
-**Ligne 50 — Regex route** :
+**Ligne 48 — Regex route** :
 ```javascript
 url.pathname.match(/^\/transfers\/(\d+)\/reservations\/([^/]+)$/)
 ```
 - Pattern : `/transfers/` + chiffres + `/reservations/` + tout ce qui n'est pas `/`
-- Capture groupe 1 : ID transfert (présent dans l'URL pour cohérence, **mais non utilisé** depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-456)
-- Capture groupe 2 : `reservationId` (UUID, extrait ligne 52)
+- Capture groupe 1 : ID transfert (extrait et parsé ligne 50)
+- Capture groupe 2 : `reservationId` (UUID, extrait ligne 51)
 - Non-match → dépasse cette branche
 
-**Ligne 52-53 — Extraction et appel** :
+**Ligne 50-51 — Extraction** :
 ```javascript
+const transferId = parseInt(cancelMatch[1], 10);
 const reservationId = cancelMatch[2];
-const result = cancelReservation(reservationId);
 ```
-- Récupère l'UUID directement sans parsing (c'est une chaîne)
-- Appelle la fonction métier `cancelReservation(reservationId)` **sans** le transferId (l'appel a été simplifié en SHIAAAAAAAAAAAAAAAAAAAAAAAA-456 ; l'UUID seul suffit à retrouver la réservation et donc le transferId associé)
+- `transferId` : groupe 1 parsé en décimal, utilisé pour cohérence [SHIA-396]
+- `reservationId` : groupe 2 récupéré directement (chaîne)
 
-**Ligne 54-55 — Mappage résultat** :
+**Ligne 52 — Appel métier** :
+```javascript
+const result = cancelReservation(reservationId, transferId);
+```
+- Appelle `cancelReservation()` avec **les deux** paramètres
+- La fonction valide que la réservation trouvée correspond bien au transferId (ligne 39 de transfers.js)
+- Si incohérent, retourne `{ ok: false, reason: "not_found" }` [SHIA-396]
+
+**Ligne 53-54 — Mappage résultat** :
 ```javascript
 if (!result.ok) return sendJson(res, 404, { error: "Reservation not found" });
 return sendJson(res, 200, { seatsLeft: result.seatsLeft });
 ```
-- `ok: false` (réservation inexistante) → 404
+- `ok: false` (réservation inexistante OU transferId incohérent) → 404
 - `ok: true` → 200 avec `seatsLeft` calculé après libération
 
 **Sémantique** : annule une réservation, libère ses sièges, retourne la disponibilité résultante
@@ -487,18 +493,17 @@ test("POST /transfers/2/reserve → 409 complet", async () => {
 **Implication** : GET /transfers suivant verra places réduites immédiatement
 
 ### Mutation d'état : cancelReservation → transfer.sold
-**Location** : transfers.js:40 (`transfer.sold -= reservation.seats`)  
-**Appelant** : server.js:53 (`cancelReservation(reservationId)`)  
+**Location** : transfers.js:41 (`transfer.sold -= reservation.seats`)  
+**Appelant** : server.js:52 (`cancelReservation(reservationId, transferId)`)  
 **Effet** : inverse la mutation de bookSeats, libère places  
 **Implication** : GET /transfers suivant verra places restaurées immédiatement
 
 ### Calcul de disponibilité : seatsLeft
 **Appelants** :
-1. server.js:21 — projection GET /transfers
-2. server.js:15 — filtrage optionnel avec `?available=true` (via `isFull()`)
-3. transfers.js:29 — validation bookSeats
-4. transfers.js:33 — retour réservation
-5. transfers.js:42 — retour annulation
+1. server.js:19 — projection GET /transfers
+2. transfers.js:29 — validation bookSeats
+3. transfers.js:33 — retour réservation
+4. transfers.js:43 — retour annulation
 
 **Formule** : `seats - sold` (toujours cohérent si seul bookSeats/cancelReservation mutent)
 
