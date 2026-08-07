@@ -228,7 +228,7 @@ Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5
 Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
-Pas implémenté. L'endpoint GET /transfers retourne toujours le catalogue complet, y compris les transferts complets (`seatsLeft: 0`). Un filtrage côté client ou une future extension côté serveur avec un paramètre (ex. `?available=true`) resterait du travail futur.
+**Implémenté** ([SHIAAAAAAAAAAAAAAAAAAAAAAAA-408](SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)). L'endpoint GET /transfers accepte un paramètre de requête `?available=true` (server.js:14-15). Quand ce paramètre est présent, seuls les transferts non-saturés (`isFull(t) === false`) sont retournés. Sans le paramètre, le catalogue complet est retourné, y compris les transferts complets (`seatsLeft: 0`).
 
 ### Modification d'une réservation
 Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
@@ -276,8 +276,8 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 
 ## Hypothèses non confirmées
 
-### `isFull` définie mais non utilisée
-La fonction `isFull(transfer)` est définie (`transfers.js:21-23`) et exportée, mais n'est pas actuellement utilisée dans `server.js`. Elle a probablement été préparée pour un futur filtrage côté serveur (ex. `?available=true`), mais le filtrage n'est pas implémenté.
+### `isFull` définie et utilisée
+La fonction `isFull(transfer)` est définie (`transfers.js:21-23`), exportée, et **utilisée dans le filtrage côté serveur** (`server.js:15`, branche `availableOnly`). Elle implémente le prédicat « transfert saturé » pour le paramètre `?available=true` introduit en [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408](SHIAAAAAAAAAAAAAAAAAAAAAAAA-408).
 
 ### Fixture transfert plein
 Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
