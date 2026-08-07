@@ -8,7 +8,7 @@
 - **Acteurs** : Frontend Web (consommateur HTTP) · API Backend (`shift-pilot-resa-api`, ce dépôt)
 - **Criticité** : Moyenne-haute — chemin secondaire mais critique pour la commodité utilisateur (droit à l'erreur)
 - **Confiance** : high
-- **Justification** : Le code source est intégralement lu (`src/server.js:48-54`, `src/transfers.js:36-43`) et couvert par tests d'intégration HTTP. Toutes les affirmations sont `VÉRIFIÉ_CODE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
+- **Justification** : Le code source est intégralement lu (`src/server.js:50-56`, `src/transfers.js:36-43`) et couvert par tests d'intégration HTTP. Toutes les affirmations sont `VÉRIFIÉ_CODE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
 - **Parent** : WORKFLOW_RESERVATION_SIEGE — l'annulation inverse une réservation précédemment effectuée
 
 ## Objectif

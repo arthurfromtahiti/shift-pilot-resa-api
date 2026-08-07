@@ -22,7 +22,7 @@
   - Réponse 200 : tableau JSON de transferts
   - Champs attendus du frontend : `from`, `to`, `price`, `availableSeats`
   - Champs réellement produits par l'API : `id`, `from`, `to`, `price`, `seatsLeft` (**DIVERGENCE : voir risques**)
-- **Implémentation API** : `shift-pilot-resa-api/src/server.js:10–20` (route GET /transfers)
+- **Implémentation API** : `shift-pilot-resa-api/src/server.js:13–23` (route GET /transfers)
 - **Usage** : rendu DOM pour chaque transfert (`<li>Papeete → Moorea — 3500 XPF (X places)</li>`)
 
 **Endpoint 2 : POST /transfers/:id/reserve (réservation)**
@@ -33,7 +33,7 @@
   - Erreur 400 : `seats` non valide (zéro, négatif, non-entier)
   - Erreur 404 : transfert inexistant
   - Erreur 409 : plus de places disponibles
-- **Implémentation API** : `shift-pilot-resa-api/src/server.js:23–45` (route POST /transfers/:id/reserve)
+- **Implémentation API** : `shift-pilot-resa-api/src/server.js:25–48` (route POST /transfers/:id/reserve)
 - **Usage** : réservation côté client ; l'UUID retourné peut être utilisé pour annulation via Endpoint 3
 - **État de maturité** : API fonctionnel (avec annulation depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-353), UI à implémenter
 
@@ -43,7 +43,7 @@
   - Requête : DELETE sur `${API_BASE_URL}/transfers/{id}/reservations/{reservationId}` (pas de body)
   - Réponse 200 : `{ seatsLeft: X }` (places libres après annulation)
   - Erreur 404 : réservation inexistante ou déjà annulée
-- **Implémentation API** : `shift-pilot-resa-api/src/server.js:48–54` (route DELETE /transfers/:id/reservations/:reservationId)
+- **Implémentation API** : `shift-pilot-resa-api/src/server.js:50–56` (route DELETE /transfers/:id/reservations/:reservationId)
 - **Usage** : annulation d'une réservation existante (via l'UUID retourné par Endpoint 2)
 - **État de maturité** : API fonctionnel, UI à implémenter
 
@@ -124,12 +124,12 @@ Transfer {
 ### Risque 1 : Divergence de noms de champs (CRITIQUE DÉJÀ IMPACTÉ)
 
 **Le problème** :
-- API expose `seatsLeft` dans la réponse GET /transfers (implémentation : `src/server.js:19`)
+- API expose `seatsLeft` dans la réponse GET /transfers (implémentation : `src/server.js:21`)
 - Frontend attend `availableSeats` pour affichage (code : `js/app.js:13`, `t.availableSeats`)
 - Résultat : frontend affiche `undefined places` au lieu du nombre réel
 
 **Preuve** :
-- API (`src/server.js:14–20`) : projection `{ id, from, to, price, seatsLeft }`
+- API (`src/server.js:16–22`) : projection `{ id, from, to, price, seatsLeft }`
 - Frontend (`js/app.js:13`) : template `${t.availableSeats} places`
 - Tests : API testé en isolation (200 OK, JSON valide) ; pas de test d'intégration end-to-end
 
@@ -168,7 +168,7 @@ Transfer {
 ### Risque 3 : Validation manquante sur `seats` (RÉSOLU — SHIAAAAAAAAAAAAAAAAAAAAAAAA-328)
 
 **Statut** : ✓ RÉSOLU — implémenté depuis SHIA-328  
-Validation `Number.isInteger(seats) && seats >= 1` est présente en `src/server.js:37-39` avec rejet 400 si invalide. Tests couverts (`test/transfers.test.js`). Aucune action requise.
+Validation `Number.isInteger(seats) && seats >= 1` est présente en `src/server.js:39-40` avec rejet 400 si invalide. Tests couverts (`test/transfers.test.js`). Aucune action requise.
 
 ### Risque 4 : Formulaire réservation absent du frontend (FONCTIONNEL)
 
