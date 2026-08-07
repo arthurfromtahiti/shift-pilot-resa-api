@@ -49,9 +49,8 @@ const server = http.createServer((req, res) => {
 
   const cancelMatch = url.pathname.match(/^\/transfers\/(\d+)\/reservations\/([^/]+)$/);
   if (cancelMatch && req.method === "DELETE") {
-    const transferId = parseInt(cancelMatch[1], 10);
     const reservationId = cancelMatch[2];
-    const result = cancelReservation(reservationId, transferId);
+    const result = cancelReservation(reservationId);
     if (!result.ok) return sendJson(res, 404, { error: "Reservation not found" });
     return sendJson(res, 200, { seatsLeft: result.seatsLeft });
   }

@@ -34,23 +34,16 @@ test("cancelReservation annule une réservation existante et libère les sièges
   const booked = bookSeats(3, 2);
   assert.equal(booked.ok, true);
   const seatsBeforeCancel = booked.seatsLeft;
-  const cancelled = cancelReservation(booked.reservationId, 3);
+  const cancelled = cancelReservation(booked.reservationId);
   assert.deepEqual(cancelled, { ok: true, seatsLeft: seatsBeforeCancel + 2 });
 });
 
 test("cancelReservation retourne not_found pour un ID inconnu", () => {
-  assert.deepEqual(cancelReservation("00000000-0000-0000-0000-000000000000", 1), { ok: false, reason: "not_found" });
-});
-
-test("cancelReservation retourne not_found quand le transferId ne correspond pas à la réservation", () => {
-  const booked = bookSeats(3, 1);
-  assert.equal(booked.ok, true);
-  assert.deepEqual(cancelReservation(booked.reservationId, 1), { ok: false, reason: "not_found" });
-  cancelReservation(booked.reservationId, 3);
+  assert.deepEqual(cancelReservation("00000000-0000-0000-0000-000000000000"), { ok: false, reason: "not_found" });
 });
 
 test("cancelReservation ne peut pas annuler deux fois la même réservation", () => {
   const booked = bookSeats(3, 1);
-  cancelReservation(booked.reservationId, 3);
-  assert.deepEqual(cancelReservation(booked.reservationId, 3), { ok: false, reason: "not_found" });
+  cancelReservation(booked.reservationId);
+  assert.deepEqual(cancelReservation(booked.reservationId), { ok: false, reason: "not_found" });
 });
