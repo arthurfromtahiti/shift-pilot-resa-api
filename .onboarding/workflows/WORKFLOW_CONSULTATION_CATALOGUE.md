@@ -59,7 +59,7 @@ Permettre à un client web de récupérer la liste des transferts inter-îles �
 
 ## Risques
 
-- **Divergence de nom de champ avec le frontend** (`HYPOTHÈSE`) : l'API retourne `seatsLeft` (`src/server.js:19`) ; selon `documents/ECOSYSTEME.md:14-22`, le frontend `shift-pilot-resa-web` accède à `t.availableSeats`, champ absent de la réponse API. Les places s'afficheraient `undefined` côté client. Le code frontend (`shift-pilot-resa-web`) n'est pas dans ce workspace — cette information est issue d'un artefact écosystème (`documents/ECOSYSTEME.md`), pas d'une lecture directe du code frontend.
+- **Divergence de nom de champ avec le frontend** (`HYPOTHÈSE`) : l'API retourne `seatsLeft` (`src/server.js:21`) ; selon `documents/ECOSYSTEME.md:14-22`, le frontend `shift-pilot-resa-web` accède à `t.availableSeats`, champ absent de la réponse API. Les places s'afficheraient `undefined` côté client. Le code frontend (`shift-pilot-resa-web`) n'est pas dans ce workspace — cette information est issue d'un artefact écosystème (`documents/ECOSYSTEME.md`), pas d'une lecture directe du code frontend.
 - **Absence de pagination** : `listTransfers()` retourne l'intégralité du tableau sans limite (`src/transfers.js:9-11`). Si le catalogue venait à grossir (ajout de lignes dans le tableau), la réponse grossit proportionnellement sans contrôle.
 - **Pas de test HTTP pour `GET /transfers`** : `test/server.test.js` ne couvre que les 3 cas POST (`test/server.test.js:34-52`). Un test de la route GET n'existe pas — une régression silencieuse est possible.
 - **Aucun cache** : chaque appel relit le tableau en mémoire et recalcule `seatsLeft` pour chaque transfert. Acceptable à ce volume (3 éléments), à revisiter si le catalogue s'élargit.

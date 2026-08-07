@@ -31,9 +31,9 @@ Permettre à un client web d'annuler une réservation précédemment acceptée, 
 
 1. Le serveur HTTP `http.createServer` reçoit la requête (`src/server.js:10`).
 2. L'URL est parsée : `new URL(req.url, "http://" + req.headers.host)` (`src/server.js:11`).
-3. Le routage teste le regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` sur `url.pathname` **et** `req.method === "DELETE"` (`src/server.js:49`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:57`).
-4. Extraction des paramètres : `transferId` (groupe 1) et `reservationId` (groupe 2) (`src/server.js:50-51`).
-5. `cancelReservation(reservationId, transferId)` est appelé **avec les deux paramètres** (`src/server.js:52`).
+3. Le routage teste le regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` sur `url.pathname` **et** `req.method === "DELETE"` (`src/server.js:50`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:59`).
+4. Extraction des paramètres : `transferId` (groupe 1) et `reservationId` (groupe 2) (`src/server.js:52-53`).
+5. `cancelReservation(reservationId, transferId)` est appelé **avec les deux paramètres** (`src/server.js:54`).
 6. Dans `cancelReservation(reservationId, transferId)` (`src/transfers.js:36-44`) [SHIA-396] :
    - Recherche `reservations.get(reservationId)` pour retrouver la réservation (ligne 37)
    - Si non trouvée : retourne `{ ok: false, reason: "not_found" }`

@@ -13,7 +13,7 @@ Les trois endpoints HTTP fonctionnent conformément à leurs spécifications int
 ## Constats détaillés
 
 **Divergence `seatsLeft` / `availableSeats`** — statut composite :
-- **(a) L'API retourne `seatsLeft`** — `VÉRIFIÉ_CODE` : `GET /transfers` construit la projection `{ id, from, to, price, seatsLeft }` (`src/server.js:19`). Constat direct sur code présent dans ce workspace.
+- **(a) L'API retourne `seatsLeft`** — `VÉRIFIÉ_CODE` : `GET /transfers` construit la projection `{ id, from, to, price, seatsLeft }` (`src/server.js:21`). Constat direct sur code présent dans ce workspace.
 - **(b) Le frontend attendrait `availableSeats`** — `HYPOTHÈSE` : `documents/ECOSYSTEME.md:14-22` indique que `shift-pilot-resa-web/js/app.js:13` accède à `t.availableSeats`. Le code frontend n'est pas dans ce workspace et n'a pas été lu directement — cette information provient d'un artefact écosystème, pas d'une lecture de code.
 - **(c) Le champ s'afficherait comme `undefined` côté web** — `HYPOTHÈSE` : conséquence directe de (b), mais non observable depuis ce workspace.
 
@@ -39,23 +39,23 @@ Le code côté API est cohérent avec lui-même ; son incompatibilité avec le c
 
 ## Dettes techniques
 
-- **Divergence `seatsLeft` / `availableSeats`** : incohérence connue et non corrigée entre l'API et le frontend — fonctionnalité principale cassée en intégration réelle (`src/server.js:19`).
+- **Divergence `seatsLeft` / `availableSeats`** : incohérence connue et non corrigée entre l'API et le frontend — fonctionnalité principale cassée en intégration réelle (`src/server.js:21`).
 - **Message d'erreur 409 ambigu** : `"Transfer full"` couvre deux cas distincts (complet vs. pas assez de places) sans distinction (`src/server.js:43-44`).
 - **Réponse de succès pauvre** : `{ reservationId, transferId, seatsLeft }` retourne maintenant un identifiant de réservation (`src/server.js:45`) mais le nombre de sièges réservés n'est pas confirmé dans la réponse.
 
 ## Zones critiques
 
-- **Contrat `seatsLeft` / `availableSeats`** (`src/server.js:19`) : c'est le point de blocage fonctionnel le plus immédiat — le product owner doit décider quel nom est canonique et quel côté change (API ou frontend).
+- **Contrat `seatsLeft` / `availableSeats`** (`src/server.js:21`) : c'est le point de blocage fonctionnel le plus immédiat — le product owner doit décider quel nom est canonique et quel côté change (API ou frontend).
 - **Sémantique du 409** (`src/server.js:44`, `src/transfers.js:29`) : un senior noterait que le même code d'erreur couvre deux situations différentes avec le même message — confus pour un client qui essaie de comprendre pourquoi sa réservation a échoué.
 
 ## Risques
 
 - **Workflow de consultation potentiellement non fonctionnel end-to-end** : si le frontend accède à `t.availableSeats` alors que l'API retourne `seatsLeft`, le champ s'affiche `undefined` et l'utilisateur ne peut pas évaluer la disponibilité d'un transfert — `HYPOTHÈSE` (le code frontend n'est pas dans ce workspace ; source : `documents/ECOSYSTEME.md:14-22`). La partie API de ce workflow est fonctionnelle — `VÉRIFIÉ_CODE`.
-- **Réservations sans référence** : sans identifiant de réservation dans la réponse 200, il est impossible de construire une fonctionnalité d'annulation, de confirmation ou d'historique côté frontend. Chaque réservation est anonyme et non traçable — `VÉRIFIÉ_CODE`.
+- ~~**Réservations sans référence**~~ : `POST /transfers/:id/reserve` retourne désormais `{ reservationId, transferId, seatsLeft }` (`src/server.js:45`) — le `reservationId` permet l'annulation via `DELETE /transfers/:id/reservations/:reservationId`. ✓ Résolue ([SHIAAAAAAAAAAAAAAAAAAAAAAAA-353](SHIAAAAAAAAAAAAAAAAAAAAAAAA-353)).
 
 ## Recommandations priorisées
 
-1. **Aligner le nom de champ `seatsLeft` / `availableSeats`** : décider du nom canonique (API ou frontend qui change) et effectuer la correction. Priorité : **haute** (bloque le workflow principal end-to-end) — `src/server.js:19` ou le code frontend.
+1. **Aligner le nom de champ `seatsLeft` / `availableSeats`** : décider du nom canonique (API ou frontend qui change) et effectuer la correction. Priorité : **haute** (bloque le workflow principal end-to-end) — `src/server.js:21` ou le code frontend.
 2. **Distinguer les cas 409** : retourner deux messages différents selon que le transfert est totalement complet (`"Transfer full"`) ou n'a pas assez de places pour la quantité demandée (`"Not enough seats"`) — `src/server.js:44`, `src/transfers.js:29` (ajouter un reason dédié). Priorité : **moyenne**.
 3. **Enrichir la réponse 200 de réservation** : inclure `seatsReserved` dans `{ reservationId, transferId, seatsLeft, seatsReserved }` pour que le client confirme la quantité réservée — `src/server.js:45`. Priorité : **basse** (manque de confort, pas de blocage fonctionnel).
 4. ~~**Décider du sort de `isFull`**~~  : maintenant utilisée pour le filtrage `?available=true` ([SHIAAAAAAAAAAAAAAAAAAAAAAAA-408](SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)) — `src/transfers.js:21-23`, `src/server.js:15`. ✓ Résolue.

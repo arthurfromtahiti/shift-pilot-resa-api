@@ -42,7 +42,7 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 1. Client HTTP envoie `GET /transfers` au serveur.
 2. Serveur reçoit la requête, valide qu'il s'agit de la bonne route et de la bonne méthode (`pathname === "/transfers" && method === "GET"` — `server.js:13`).
 3. Serveur appelle `listTransfers()` qui retourne le tableau en mémoire des 3 transferts avec tous leurs champs (`transfers.js:3-7`).
-4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:14-20`).
+4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:16-22`).
 5. Le calcul de `seatsLeft` pour chaque transfert s'effectue par `seatsLeft(transfer) = transfer.seats - transfer.sold` (`transfers.js:13-15`).
 6. Serveur sérialise le tableau projeté en JSON et l'envoie au client avec statut 200 et header `Content-Type: application/json` (`server.js:5-8`).
 
@@ -108,10 +108,10 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 **Déroulement** :
 
-1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-55`).
-2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
-3. Serveur extrait `transferId` et `reservationId` (`server.js:50-51`).
-4. Serveur appelle `cancelReservation(reservationId, transferId)` (`server.js:52`, `transfers.js:36-44`) avec les deux paramètres.
+1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:50-57`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:50`), extrait l'ID du transfert et l'UUID, s'assure que la méthode est DELETE (`server.js:51`).
+3. Serveur extrait `transferId` et `reservationId` (`server.js:52-53`).
+4. Serveur appelle `cancelReservation(reservationId, transferId)` (`server.js:54`, `transfers.js:36-44`) avec les deux paramètres.
 5. Dans `cancelReservation()` :
    - Recherche la réservation dans le registre Map (`reservations.get(reservationId)`) (`transfers.js:37`), rejette 404 si non trouvée.
    - **Valide cohérence** [SHIA-396] : vérifie que `reservation.transferId === transferId` (`transfers.js:39`), rejette 404 si incohérent (protection contre les IDs mal appairés).
