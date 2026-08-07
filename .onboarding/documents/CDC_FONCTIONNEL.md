@@ -227,7 +227,7 @@ Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5
 Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
-Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
+Le client peut optionnellement demander « uniquement les transferts avec places disponibles » via le paramètre de requête `?available=true` (`server.js:14-15`). Sans ce paramètre, tous les transferts sont retournés. [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
 
 ### Modification d'une réservation
 Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
@@ -275,12 +275,8 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 
 ## Hypothèses non confirmées
 
-### `isFull` exportée mais non câblée
-La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21-23`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
-- Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
-- Indicateur UI côté frontend (champ `isFull` dans la réponse)
-
-Aucune décision documentée.
+### `isFull` câblée au filtrage disponibilité
+La fonction `isFull(transfer)` est définie, exportée et utilisée pour implémenter le filtrage `?available=true` (`src/server.js:15` — `!isFull(t)` sélectionne les transferts avec places disponibles). Elle n'est pas exposée dans la réponse HTTP. [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
 
 ### Fixture transfert plein
 Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
