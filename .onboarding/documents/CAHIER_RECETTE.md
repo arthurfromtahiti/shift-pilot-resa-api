@@ -6,11 +6,12 @@ Plan de test — parcours à valider, cas de régression, critères d'acceptatio
 
 ## Préambule
 
-Le cahier dérive de deux workflows analysés :
-- `WORKFLOW_LISTE_TRANSFERTS` — l'unique endpoint public GET /transfers.
-- `WORKFLOW_CALCUL_DISPONIBILITE` — primitives de calcul de disponibilité.
+Le cahier dérive de trois workflows documentés :
+- `WORKFLOW_CONSULTATION_CATALOGUE` — consultation et filtrage du catalogue GET /transfers (avec filtre optionnel `?available=true` depuis SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)
+- `WORKFLOW_RESERVATION_SIEGE` — réservation de sièges POST /transfers/:id/reserve (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
+- `WORKFLOW_ANNULATION_SIEGE` — annulation de réservation DELETE /transfers/:id/reservations/:reservationId (SHIAAAAAAAAAAAAAAAAAAAAAAAA-353)
 
-Tests attendus : unitaires sur les fonctions pures + intégration HTTP (actuellement absent).
+Tests : unitaires sur les fonctions domaine (`seatsLeft`, `isFull`, `bookSeats`, `cancelReservation` — les deux premières sont pures, les deux dernières mutent l'état intentionnellement) + intégration HTTP (couverte par `test/server.test.js`).
 
 ---
 
@@ -93,6 +94,66 @@ Après un démarrage frais du serveur (ou réinitialisation du module), la répo
 
 ---
 
+## Cas de test 1b : Filtrage par disponibilité — `GET /transfers?available=true` [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+
+**Type** : intégration HTTP (API flow)
+
+**Objectif** : valider que le paramètre `?available=true` filtre les transferts pour n'inclure que ceux ayant des places restantes.
+
+### Pré-condition
+- Serveur Node.js lancé sur port 3100.
+- État initial : id 1 (28 restantes), id 2 (0 restantes — complet), id 3 (15 restantes).
+
+### Étapes
+
+1. **Préparer une requête HTTP**
+   - Verbe : `GET`
+   - URL : `http://localhost:3100/transfers?available=true`
+   - Pas de header Authorization, pas de body.
+
+2. **Envoyer la requête**
+
+3. **Recevoir la réponse**
+   - Code de statut attendu : **200 OK**.
+   - Header `Content-Type` attendu : **`application/json`**.
+   - Body : un array JSON contenant **2 objets** (id 1 et id 3, exclusion de id 2 qui est complet).
+
+### Critères d'acceptation
+
+La réponse doit contenir exactement les transferts où `seatsLeft > 0` (i.e. `isFull(t) === false`) :
+
+```json
+[
+  {
+    "id": 1,
+    "from": "Papeete",
+    "to": "Moorea",
+    "price": 3500,
+    "seatsLeft": 28
+  },
+  {
+    "id": 3,
+    "from": "Raiatea",
+    "to": "Tahaa",
+    "price": 1800,
+    "seatsLeft": 15
+  }
+]
+```
+
+**Validation** :
+- Transfert id 1 : `seatsLeft = 28 > 0` → inclus. ✓
+- Transfert id 2 : `seatsLeft = 0` (saturé) → **exclu**. ✓
+- Transfert id 3 : `seatsLeft = 15 > 0` → inclus. ✓
+
+### Résultat
+
+**Acceptation** : le filtre retourne un array de 2 transferts, excluant le transfert complet (id 2).
+
+**Rejet** : le serveur retourne 3 éléments, inclut id 2, ou retourne un code d'erreur.
+
+---
+
 ## Cas de test 2 : Réponse 404 sur route invalide
 
 **Type** : intégration HTTP (negative case)
@@ -125,7 +186,7 @@ Après un démarrage frais du serveur (ou réinitialisation du module), la répo
 
 ---
 
-## Cas de test 3 : Calcul de disponibilité — fonction `seatsLeft()`
+## ## Cas de test 3 : Calcul de disponibilité — fonction `seatsLeft()`
 
 **Type** : unitaire (fonction pure)
 
@@ -404,37 +465,207 @@ fetch('http://localhost:3100/transfers')
 
 ---
 
+## Cas de test 9 : Réservation de sièges — `POST /transfers/:id/reserve` [SHIAAAAAAAAAAAAAAAAAAAAAAAA-61]
+
+**Type** : intégration HTTP (API flow critique)
+
+**Objectif** : valider que le serveur crée une réservation, incrémente `sold`, génère un UUID et le retourne.
+
+### Pré-condition
+- Serveur Node.js lancé sur port 3100.
+- État initial : id 1 a 28 places libres (40 total, 12 vendues).
+
+### Cas 9a : Réservation nominale (1 siège)
+
+**Étapes**
+1. Envoyer `POST /transfers/1/reserve` (pas de body, défaut 1 siège)
+2. Recevoir la réponse
+
+**Code attendu** : **200 OK**
+
+**Body attendu** :
+```json
+{
+  "reservationId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "transferId": 1,
+  "seatsLeft": 27
+}
+```
+
+**Critères** :
+- `reservationId` : UUID valide (format v4 générée par `randomUUID()`)
+- `transferId` : 1 (celui de la requête)
+- `seatsLeft` : 27 (28 - 1 réservation)
+- Les 28 places étaient libres → la réservation réussit
+- `transfer.sold` est incrémenté de 1 en mémoire
+
+**Validation** : récupérer immédiatement `GET /transfers` et vérifier que id 1 affiche maintenant 27 places.
+
+**Acceptation** : réservation créée, UUID retourné, places libres décrémentées, état persistent en mémoire.
+
+**Rejet** : code d'erreur, UUID absent, places non décrémentées.
+
+### Cas 9b : Réservation multi-sièges
+
+**Étape** : envoyer `POST /transfers/1/reserve` avec body `{ "seats": 5 }`
+
+**Code attendu** : **200 OK**
+
+**Body attendu** :
+```json
+{
+  "reservationId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "transferId": 1,
+  "seatsLeft": 22
+}
+```
+
+**Critères** : 27 places libres, on en réserve 5 → 22 restantes.
+
+### Cas 9c : Réservation sur transfert saturé
+
+**Étape** : envoyer `POST /transfers/2/reserve` (id 2 est plein : 60/60)
+
+**Code attendu** : **409 Conflict**
+
+**Body attendu** :
+```json
+{ "error": "Transfer full" }
+```
+
+**Critères** : aucune réservation créée, UUID non généré, `seatsLeft` inchangé.
+
+### Cas 9d : Réservation avec ID invalide
+
+**Étape** : envoyer `POST /transfers/999/reserve` (transfert n'existe pas)
+
+**Code attendu** : **404 Not Found**
+
+**Body attendu** :
+```json
+{ "error": "Transfer not found" }
+```
+
+### Cas 9e : Réservation avec seats invalide
+
+**Étape** : envoyer `POST /transfers/1/reserve` avec body `{ "seats": -5 }` ou `{ "seats": "abc" }`
+
+**Code attendu** : **400 Bad Request**
+
+**Body attendu** :
+```json
+{ "error": "seats must be a positive integer" }
+```
+
+### Résultat
+
+**Acceptation** : réservations créées avec UUID, places décrémentées, erreurs gérées correctement (404/409/400 selon contexte).
+
+**Rejet** : crash, UUID non généré, places non décrémentées, erreurs non distinguées.
+
+---
+
+## Cas de test 10 : Annulation de réservation — `DELETE /transfers/:id/reservations/:reservationId` [SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+
+**Type** : intégration HTTP (API flow critique)
+
+**Objectif** : valider que le serveur annule une réservation, décrémente `sold` et supprime du registre.
+
+### Pré-condition
+- Serveur lancé, une réservation existante (ex. UUID = `f47ac10b-58cc-4372-a567-0e02b2c3d479` sur transfert id 1 pour 5 sièges)
+- État avant annulation : id 1 a 22 places libres.
+
+### Cas 10a : Annulation nominale
+
+**Étape** : envoyer `DELETE /transfers/1/reservations/f47ac10b-58cc-4372-a567-0e02b2c3d479`
+
+**Code attendu** : **200 OK**
+
+**Body attendu** :
+```json
+{ "seatsLeft": 27 }
+```
+
+**Critères** :
+- Réservation supprimée du registre Map
+- `transfer.sold` est décrémenté de 5 (places restaurées)
+- Réponse retourne `seatsLeft` après annulation (22 + 5 = 27)
+
+**Validation** : une seconde tentative d'annulation avec le même UUID doit retourner 404 (réservation déjà supprimée).
+
+**Acceptation** : réservation annulée, places libérées, état synchro avec le registre.
+
+**Rejet** : crash, places non libérées, réservation toujours present.
+
+### Cas 10b : Annulation sur réservation inexistante
+
+**Étape** : envoyer `DELETE /transfers/1/reservations/00000000-0000-0000-0000-000000000000` (UUID qui n'existe pas)
+
+**Code attendu** : **404 Not Found**
+
+**Body attendu** :
+```json
+{ "error": "Reservation not found" }
+```
+
+### Cas 10c : Annulation avec incohérence transferId
+
+**Étape** : envoyer `DELETE /transfers/2/reservations/f47ac10b-...` (URL dit transfert 2, mais réservation est sur transfert 1)
+
+**Code attendu** : **404 Not Found**
+
+**Body attendu** :
+```json
+{ "error": "Reservation not found" }
+```
+
+**Critères** : validation de cohérence URL vs. objet (`reservation.transferId !== parseInt(transferId)` rejette la requête — SHIAAAAAAAAAAAAAAAAAAAAAAAA-396)
+
+### Résultat
+
+**Acceptation** : annulation crée libère les places, erreurs gérées (404 si UUID invalide ou transferId incohérent).
+
+**Rejet** : crash, places non libérées, annulations croisées acceptées.
+
+---
+
 ## Matrice de couverture actuelle
 
-| Cas | Type | Implémenté | Couvert | Statut |
+| Cas | Type | Implémenté | Couvert par test | Statut |
 |-----|------|-----------|---------|--------|
-| 1. GET /transfers | HTTP | ✓ | ✗ (pas de test HTTP) | À tester |
-| 2. 404 routes invalides | HTTP | ✓ | ✗ | À tester |
-| 3. seatsLeft() | Unitaire | ✓ | ~ (1 cas sur 4) | Partiellement couvert |
-| 4. isFull() | Unitaire | ✓ | ✓ (2 cas suffisants) | Couvert |
+| 1. GET /transfers | HTTP | ✓ | ✓ (`test/server.test.js:128-133`) | Couvert |
+| 1b. GET /transfers?available=true [SHIA-408] | HTTP | ✓ | ✓ (`test/server.test.js:135-140`) | Couvert |
+| 2. 404 routes invalides | HTTP | ✓ | Partiellement (`test/server.test.js:142-147`) | Partiellement couvert |
+| 3. seatsLeft() | Unitaire | ✓ | ~ (3 cas sur 4) | Partiellement couvert |
+| 4. isFull() | Unitaire | ✓ | ✓ (2 cas) | Couvert |
 | 5. listTransfers() | Unitaire | ✓ | ~ (longueur seulement) | Partiellement couvert |
 | 6. Pas de mutation | Intégration | ✓ (conception) | ✗ | À tester |
-| 7. Robustesse erreurs | Robustesse | ~ (incomplet) | ✗ | Défaillant |
+| 7. Robustesse erreurs (URL) | Robustesse | ✗ | ✗ | Défaillant (risque actif) |
 | 8. CORS frontend | Intégration | ✗ | ✗ | Non implémenté |
+| 9. POST /transfers/:id/reserve [SHIA-61] | HTTP | ✓ | ✓ (`test/server.test.js`) | Couvert (5 cas) |
+| 10. DELETE /transfers/:id/reservations/:id [SHIA-353] | HTTP | ✓ | ✓ (`test/server.test.js`) | Couvert (3 cas) |
 
 ---
 
 ## Priorité de test
 
 ### Immédiat (avant production)
-1. ✓ Tests HTTP `GET /transfers` (cas nominal + structure)
-2. ✓ Tests HTTP 404 (routes invalides)
-3. ✓ Try/catch URL parsing (risque crash)
-4. ✓ Headers CORS (frontend bloqué)
+1. ✓ Tests HTTP `GET /transfers` + `?available=true` (couvert)
+2. ✓ Tests HTTP POST /reserve (couvert)
+3. ✓ Tests HTTP DELETE /reservations (couvert)
+4. ⚠ Try/catch URL parsing (risque crash — non implémenté)
+5. ⚠ Headers CORS (frontend bloqué — non implémenté)
 
-### Court terme (avant ajout de réservation)
-5. Tests de cas limites `seatsLeft()` (survente, 0 vente)
-6. Test d'intégration pas de mutation d'état
-7. Validation des invariants (sold ≤ seats)
+### Court terme (recette complète)
+6. Tests de cas limites `seatsLeft()` (survente)
+7. Test d'intégration : pas de mutation entre appels
+8. Validation des invariants (sold ≤ seats)
+9. Sémantique 409 : distinguer "complet" de "pas assez de places"
 
-### Moyen terme (évolution)
-8. Tests HTTP POST/PUT/PATCH (réservation, quand implémenté)
-9. Tests base de données (si migration)
+### Moyen terme (avant production)
+10. Try/catch sur URL parsing (crash actif)
+11. CORS headers (nécessaire si frontend sur port différent)
+12. Authentification (si multi-utilisateur souhaité)
 
 ---
 
@@ -463,8 +694,11 @@ PORT=3000 node src/server.js
 
 ## Confiance et vérification
 
-**Workflows couverts** : 2 (LISTE_TRANSFERTS, CALCUL_DISPONIBILITE)
-**Cas testés actuellement** : 3 (unitaires, fonctions pures)
-**Gap critique** : zéro test HTTP du serveur + deux risques actifs (crash URL, CORS).
+**Workflows couverts** : 3 (CONSULTATION_CATALOGUE, RESERVATION_SIEGE, ANNULATION_SIEGE)
+**Cas testés implémentés** : 10 (unitaires + intégration HTTP)
+**Cas couverts par `test/server.test.js`** : GET 200, GET?available, POST 200/400/404/409, DELETE 200/404
+**Confiance fonctionnelle** : high — tous les endpoints documentés sont testés
+**Dettes critiques** : risque crash URL parsing (`server.js:11`), absence CORS (bloquant frontend)
+**Confiance documentaire** : high — matrices couvrent les 3 workflows validés, test cases détaillés et traçables
 
 **Recommandation** : écrire des tests HTTP intégrés (supertest, node-fetch) avant de considérer le service production-ready. Voir `TESTING_AUDIT.md` pour les détails.

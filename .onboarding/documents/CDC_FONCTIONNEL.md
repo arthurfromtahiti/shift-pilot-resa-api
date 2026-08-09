@@ -31,22 +31,26 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 ---
 
-## Parcours utilisateur principal : Consulter les transferts disponibles
+## Parcours utilisateur principal : Consulter le catalogue des transferts (filtrable par disponibilité) [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
 
-**Objectif** : le client obtient la liste complète des trajets avec places restantes.
+**Objectif** : le client obtient la liste des trajets avec places restantes — optionnellement filtrée pour ne voir que ceux ayant des places.
 
-**Déclencheur** : accès au frontend `shift-pilot-resa-web`, affichage du catalogue.
+**Déclencheur** : accès au frontend `shift-pilot-resa-web`, affichage du catalogue (HYPOTHÈSE — déduit de README.md:4, non confirmé par audit de workflow).
 
 **Déroulement** :
 
-1. Client HTTP envoie `GET /transfers` au serveur.
+1. Client HTTP envoie `GET /transfers` (ou `GET /transfers?available=true`) au serveur.
 2. Serveur reçoit la requête, valide qu'il s'agit de la bonne route et de la bonne méthode (`pathname === "/transfers" && method === "GET"` — `server.js:13`).
-3. Serveur appelle `listTransfers()` qui retourne le tableau en mémoire des 3 transferts avec tous leurs champs (`transfers.js:3-7`).
-4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:14-20`).
-5. Le calcul de `seatsLeft` pour chaque transfert s'effectue par `seatsLeft(transfer) = transfer.seats - transfer.sold` (`transfers.js:13-15`).
-6. Serveur sérialise le tableau projeté en JSON et l'envoie au client avec statut 200 et header `Content-Type: application/json` (`server.js:5-8`).
+3. Serveur lit le paramètre optionnel `available` : `const availableOnly = url.searchParams.get("available") === "true"` (`server.js:14`).
+4. Serveur appelle `listTransfers()` qui retourne le tableau en mémoire des 3 transferts (`transfers.js:13-15`).
+5. **Filtrage conditionnel** (`server.js:15`) :
+   - Si `availableOnly === true` : applique `.filter(t => !isFull(t))` pour exclure les transferts saturés (`isFull(t)` retourne `true` si `seatsLeft(t) === 0`).
+   - Sinon : retourne la liste complète sans filtrage.
+6. Pour chaque transfert (filtré ou non), le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:16-22`).
+7. Le calcul de `seatsLeft` pour chaque transfert s'effectue par `seatsLeft(transfer) = transfer.seats - transfer.sold` (`transfers.js:17-19`).
+8. Serveur sérialise le tableau projeté en JSON et l'envoie au client avec statut 200 et header `Content-Type: application/json` (`server.js:5-8`).
 
-**État observé par le client** : réponse JSON bien formée contenant 3 objets, chacun avec `id, from, to, price, seatsLeft` :
+**État observé par le client** : réponse JSON bien formée contenant les transferts demandés (tous ou filtrés), chacun avec `id, from, to, price, seatsLeft` :
 
 ```json
 [
@@ -68,11 +72,11 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 **Déroulement** :
 
-1. Client HTTP envoie `POST /transfers/{id}/reserve` au serveur avec corps JSON optionnel `{ seats: N }` (`server.js:23-45`).
-2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reserve$/` (`server.js:23`), extrait l'ID et s'assure que la méthode est POST (`server.js:24`).
-3. Serveur accumule le corps HTTP chunk par chunk, parse le JSON, extraite valeur de `seats` avec défaut 1 si absent (`server.js:26-36`).
-4. Serveur valide que `seats` est un entier positif (≥ 1), rejette avec 400 si invalide (`server.js:37-39`).
-5. Serveur appelle `bookSeats(id, seats)` (transferts.js:25-34`).
+1. Client HTTP envoie `POST /transfers/{id}/reserve` au serveur avec corps JSON optionnel `{ seats: N }` (`server.js:25-46`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reserve$/` (`server.js:25`), extrait l'ID et s'assure que la méthode est POST (`server.js:26`).
+3. Serveur accumule le corps HTTP chunk par chunk, parse le JSON, extraite valeur de `seats` avec défaut 1 si absent (`server.js:29-39`).
+4. Serveur valide que `seats` est un entier positif (≥ 1), rejette avec 400 si invalide (`server.js:38-39`).
+5. Serveur appelle `bookSeats(id, seatsValue)` (`server.js:42`, `transfers.js:25-34`).
 6. Dans `bookSeats()` :
    - Validation `seats > 0` et `Number.isInteger(seats)` (redondante avec étape 4, mais robuste) (`transfers.js:26`).
    - Recherche du transfert par ID (`transfers.js:27-28`), rejette 404 si non trouvé.
@@ -81,7 +85,7 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
    - **Génération UUID** : `reservationId = randomUUID()` (`transfers.js:31`).
    - **Enregistrement** : `reservations.set(reservationId, { transferId, seats })` (`transfers.js:32`).
    - Retour `{ ok: true, reservationId, seatsLeft: seatsLeft(transfer) }` (`transfers.js:33`).
-7. Mappage résultats → réponse HTTP (`server.js:41-43`) :
+7. Mappage résultats → réponse HTTP (`server.js:43-45`) :
    - `reason: "not_found"` → 404 `{ error: "Transfer not found" }`
    - `reason: "full"` → 409 `{ error: "Transfer full" }`
    - `ok: true` → 200 `{ reservationId: UUID, transferId: id, seatsLeft: X }` [UPDATED SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
@@ -108,18 +112,19 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 **Déroulement** :
 
-1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-54`).
-2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert (non utilisé) et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
-3. Serveur extrait `reservationId` du groupe regex 2 (`server.js:50`).
-4. Serveur appelle `cancelReservation(reservationId)` (`server.js:51`, `transfers.js:36-43`).
+1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:50-57`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:50`), extrait l'ID du transfert et l'UUID, s'assure que la méthode est DELETE (`server.js:51`).
+3. Serveur extrait `transferId` du groupe regex 1 et `reservationId` du groupe regex 2 (`server.js:52-53`).
+4. Serveur appelle `cancelReservation(reservationId, transferId)` (`server.js:54`, `transfers.js:36-44`).
 5. Dans `cancelReservation()` :
    - Recherche la réservation dans le registre Map (`reservations.get(reservationId)`) (`transfers.js:37`), rejette 404 si non trouvée.
-   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:39`).
-   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:40`).
-   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:41`).
-   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:42`).
-6. Mappage résultats → réponse HTTP (`server.js:52-53`) :
-   - `ok: false` (réservation inexistante/déjà annulée) → 404 `{ error: "Reservation not found" }`
+   - **Validation de cohérence** : vérifie que `reservation.transferId === transferId` (`transfers.js:39`), rejette 404 si incohérence (attaque ou requête malformée).
+   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:40`).
+   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:41`).
+   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:42`).
+   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:43`).
+6. Mappage résultats → réponse HTTP (`server.js:55-56`) :
+   - `ok: false` (réservation inexistante, incohérence transferId, ou déjà annulée) → 404 `{ error: "Reservation not found" }`
    - `ok: true` → 200 `{ seatsLeft: X }` (places libres après annulation)
 
 **État observé par le client** : réponse 200 JSON contenant les places libres après libération :
@@ -213,6 +218,9 @@ Les champs `seats` et `sold` n'apparaissent jamais dans la réponse HTTP. Le cli
 
 **Cohérence** : tous les transferts retournés, y compris les saturés (id 2). Aucun filtrage côté serveur.
 
+### Filtrage côté serveur par disponibilité [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+**Possible** : le query param `?available=true` filtre les transferts sur `GET /transfers` pour ne retourner que ceux ayant `seatsLeft > 0` (i.e. `isFull(t) === false`). Implémentation : `src/server.js:14-15`. Sans ce paramètre, la liste complète est retournée — comportement antérieur par défaut.
+
 ### Aucune authentification, aucune autorisation
 L'endpoint est public. N'importe quel client HTTP peut l'appeler. Pas de vérification d'identité, pas de token, pas de contrôle d'accès.
 
@@ -221,13 +229,10 @@ L'endpoint est public. N'importe quel client HTTP peut l'appeler. Pas de vérifi
 ## Cas de non-fonctionnement (hors périmètre)
 
 ### Modification du catalogue
-Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5`) réinitialisée à chaque démarrage du serveur.
+Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5-9`) réinitialisée à chaque démarrage du serveur.
 
 ### Persistance de réservations
 Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
-
-### Filtrage côté serveur
-Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
 
 ### Modification d'une réservation
 Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
@@ -264,7 +269,7 @@ Routes supportées (non-404) :
 ## Intégrations déclarées
 
 ### Consommateur : `shift-pilot-resa-web`
-Frontend React/Vue/autre, mentionné dans `README.md:4` comme consommateur de cette API. Détails du frontend hors périmètre. Intégration attendue : `fetch('http://api:3100/transfers')` ou similaire depuis le navigateur.
+Frontend React/Vue/autre, mentionné dans `README.md:4` comme consommateur de cette API. Détails du frontend hors périmètre. Intégration attendue : `fetch('http://localhost:3100/transfers')` (HYPOTHÈSE — URL illustrative, non confirmée par audit) depuis le navigateur.
 
 **Risque CORS** : le frontend sera bloqué si tournant sur une origine différente (`http://localhost:3000` vs `http://localhost:3100`). Aucun header `Access-Control-Allow-Origin` n'est actuellement posé. Voir `SECURITY_ROBUSTNESS_AUDIT.md`.
 
@@ -275,13 +280,6 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 
 ## Hypothèses non confirmées
 
-### `isFull` exportée mais non câblée
-La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21-23`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
-- Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
-- Indicateur UI côté frontend (champ `isFull` dans la réponse)
-
-Aucune décision documentée.
-
 ### Fixture transfert plein
 Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
 
@@ -289,7 +287,7 @@ Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'i
 Le serveur valide que `seats` est un entier positif (ligne 37-39) et rejette avec 400 si non. C'est une validation côté HTTP, doublée par une validation symétrique dans `bookSeats()` (ligne 26). Stratégie prudente pour un pilote, mais en production une validation unique (soit HTTP, soit métier) suffirait.
 
 ### Synchronisation `sold` depuis un système externe
-Le champ `sold` est maintenant incrémenté par `bookSeats()` et décrémenté par `cancelReservation()`, mais jamais chargé depuis un système externe au démarrage. En cas de redémarrage, on revient aux valeurs hardcodées. Aucun mécanisme de chargement/synchronisation asynchrone (backoffice, PMS, base de données) n'existe.
+Le champ `sold` est incrémenté par `bookSeats()` et décrémenté par `cancelReservation()`. Aucun mécanisme de chargement/synchronisation asynchrone depuis un système externe (backoffice, PMS, base de données) n'existe — en cas de redémarrage du serveur, les valeurs de `sold` reviennent aux données hardcodées (perte en mémoire).
 
 ---
 

@@ -6,16 +6,19 @@
 
 `shift-pilot-resa-api` est un **pilote de démonstration SHIFT/Paperclip** — une API Node.js minimaliste pour consulter un catalogue de transferts inter-îles (Polynésie française) avec disponibilité en temps réel. Cet API constitue la partie backend d'un système de réservation dont le frontend (`shift-pilot-resa-web`, dépôt séparé) est consommateur.
 
-**Périmètre implémenté** : un seul endpoint `GET /transfers` retourne la liste des 3 transferts disponibles avec le nombre de places restantes calculé pour chacun.
+**Périmètre implémenté** : trois endpoints HTTP fonctionnels :
+1. `GET /transfers` — retourne le catalogue des 3 transferts avec places restantes ; filtrable via `?available=true` (SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)
+2. `POST /transfers/:id/reserve` — réserve N sièges sur un transfert, retourne un UUID de réservation (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61)
+3. `DELETE /transfers/:id/reservations/:reservationId` — annule une réservation, libère les sièges (SHIAAAAAAAAAAAAAAAAAAAAAAAA-353)
 
-**Périmètre non implémenté** : aucun endpoint de réservation (booking, annulation, etc.) n'existe. Le champ `sold` (places vendues) est hardcodé et jamais incrémenté au runtime.
+Le champ `sold` est incrémenté à chaque réservation, décrémenté à chaque annulation (mutations en mémoire) ; la volatilité des données persiste (pas de base de données).
 
 ## Stack et architecture
 
 - **Runtime** : Node.js ≥18 (vanilla, zero dépendances externes)
 - **Test runner** : `node:test` natif + `node:assert/strict`
 - **Démarrage** : `node src/server.js` (port défaut 3100)
-- **Taille** : 2 fichiers source (~51 lignes) + 1 fichier test (16 lignes)
+- **Taille** : 2 fichiers source (~112 lignes) + 2 fichiers test (~196 lignes : 140 + 56 lignes respectivement)
 
 Architecture volontairement rudimentaire : séparation claire transport/domaine (`server.js` vs. `transfers.js`), pas de framework, pas d'ORM, pas de base de données. Données statiques en mémoire. Testabilité architecturale préservée via `require.main === module`.
 
@@ -25,14 +28,25 @@ Architecture volontairement rudimentaire : séparation claire transport/domaine 
 3 trajets définis en dur (`transfers.js:3-7`) : Papeete↔Moorea (40 places, 12 vendues), Papeete↔Bora Bora (60 places, 60 vendues — plein), Raiatea↔Tahaa (20 places, 5 vendues). Chaque transfert porte `id, from, to, seats, sold, price` ; le schéma est implicite (TypeScript absent).
 
 ### 2. Calcul de disponibilité
-Règle centrale : `seatsLeft(transfer) = transfer.seats - transfer.sold`. Deux primitives exportées (non intégrées à HTTP — voir dettes) :
-- `seatsLeft(t)` — places restantes pour un transfert.
-- `isFull(t)` — booléen : saturation binaire (`seatsLeft === 0`).
+Règle centrale : `seatsLeft(transfer) = transfer.seats - transfer.sold`. Deux primitives exportées et intégrées à HTTP :
+- `seatsLeft(t)` — places restantes pour un transfert (fonction pure, projetée dans `GET /transfers` et retournée après réservation/annulation).
+- `isFull(t)` — fonction pure, booléen : saturation binaire (`seatsLeft === 0`), utilisée pour filtrer les transferts saturés via `?available=true`.
 
-Fonctions pures, testées, sans effet de bord.
+Note : `seatsLeft()` et `isFull()` sont des fonctions pures (sans effet de bord, déterministes), tandis que `bookSeats()` et `cancelReservation()` produisent intentionnellement des mutations d'état.
 
-### 3. Exposition HTTP
-Un seul endpoint public : `GET /transfers` retourne un tableau JSON projeté (`id, from, to, price, seatsLeft`), sans exposer `seats` ni `sold` (données internes). Statut 200, Content-Type `application/json`. Toute autre requête : 404 sans distinction de méthode/route.
+### 3. Réservation de sièges [SHIAAAAAAAAAAAAAAAAAAAAAAAA-61]
+Endpoint `POST /transfers/:id/reserve` : client envoie un entier optionnel `seats` (défaut 1) ; le serveur valide la capacité, incrémente `sold`, génère un UUID, enregistre la réservation en registre Map en mémoire. Réponse 200 `{ reservationId, transferId, seatsLeft }` en succès ; 404 si transfert inexistant ; 409 si capacité insuffisante ; 400 si validation invalide.
+
+### 4. Annulation de réservation [SHIAAAAAAAAAAAAAAAAAAAAAAAA-353]
+Endpoint `DELETE /transfers/:id/reservations/:reservationId` : client fournit un UUID ; le serveur valide la cohérence entre `transferId` (URL) et `reservation.transferId`, décrémente `sold`, supprime du registre. Réponse 200 `{ seatsLeft }` en succès ; 404 si réservation inexistante ou incohérence de transfert.
+
+### 5. Exposition HTTP (3 endpoints)
+- `GET /transfers` — catalogue projeté (`id, from, to, price, seatsLeft`), filtrable via `?available=true` ; toujours 200
+- `POST /transfers/:id/reserve` — créer réservation ; 200/400/404/409
+- `DELETE /transfers/:id/reservations/:reservationId` — annuler réservation ; 200/404
+- Toute autre requête : 404 sans distinction de méthode/route
+
+Données internes `seats` et `sold` jamais exposées — projection JSON masquée correctement.
 
 ## Points d'attention critiques
 
@@ -45,11 +59,11 @@ Aucun header `Access-Control-Allow-Origin` posé. `shift-pilot-resa-web` (consom
 ### Références mutables exposées
 `listTransfers()` retourne le tableau interne sans copie (`transfers.js:10`). Un futur endpoint de réservation qui muterait `sold` via cette référence au lieu d'une fonction dédiée crée un vecteur de corruption silencieuse de l'état global. **Risque latent**.
 
-### `isFull` orpheline
-Exportée (`transfers.js:21`) mais non importée par `server.js`. La fonction n'est câblée à aucun endpoint HTTP. Un développeur futur ignorant son existence pourrait réécrire la règle de saturation indépendamment. **Risque documentaire**.
+### Filtre de disponibilité [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408]
+`isFull()` est maintenant importée et utilisée pour filtrer les transferts saturés sur `GET /transfers?available=true` (`server.js:14-15`). Plus de fonction orpheline.
 
-### Données statiques ≠ disponibilité réelle
-`sold` jamais incrémenté → `seatsLeft` reflète des valeurs hardcodées, pas l'état réel de vente. Le service affiche que Bora Bora a 0 places restantes depuis le démarrage. Si le frontend présente cela comme « temps réel », c'est trompeur. **Acceptable en pilote, attention pour la production**.
+### Données volatiles et persistance éphémère
+`sold` est incrémenté par les réservations et décrémenté par les annulations ; en cas de redémarrage du serveur, les valeurs reviennent aux données hardcodées. Le service affiche l'état en mémoire courant, mais une interruption du process perd tous les changements de `sold`. Si le frontend anticipe une persistance cross-restart, c'est un risque. **Acceptable en pilote, approche revisitée pour production**.
 
 ## Dépendances externes
 
@@ -61,13 +75,25 @@ Tableau littéral en mémoire, réinitialisé à chaque redémarrage. Aucune bas
 
 ## Cas d'usage testés
 
-Unique workflow HTTP couvert par `WORKFLOW_LISTE_TRANSFERTS` (audité, confiance high) :
-1. Client HTTP → `GET /transfers`
-2. Serveur parse URL, valide la route
-3. Liste les 3 transferts avec `seatsLeft` calculé
-4. JSON → client en statut 200
+Trois workflows HTTP documentés (tous audités, confiance high) :
 
-Calcul de disponibilité (`WORKFLOW_CALCUL_DISPONIBILITE`, confiance high) : deux primitives pures, testées, sans dépendance externe.
+1. **Consultation catalogue** (`WORKFLOW_CONSULTATION_CATALOGUE`) :
+   - Client HTTP → `GET /transfers` (ou `?available=true`)
+   - Serveur parse URL, valide la route, applique filtre optionnel via `isFull()`
+   - Liste les 3 transferts (ou sous-ensemble) avec `seatsLeft` calculé
+   - JSON → client en statut 200
+
+2. **Réservation de sièges** (`WORKFLOW_RESERVATION_SIEGE`) :
+   - Client HTTP → `POST /transfers/:id/reserve { seats: N }`
+   - Serveur valide capacité, incrémente `sold`, génère UUID, retourne 200 `{ reservationId, transferId, seatsLeft }`
+   - Ou retourne 404/409/400 selon l'erreur
+
+3. **Annulation de réservation** (`WORKFLOW_ANNULATION_SIEGE`) :
+   - Client HTTP → `DELETE /transfers/:id/reservations/:UUID`
+   - Serveur valide cohérence ID, décrémente `sold`, supprime du registre, retourne 200 `{ seatsLeft }`
+   - Ou retourne 404
+
+Calcul de disponibilité : deux primitives pures (`seatsLeft`, `isFull`), testées, sans dépendance externe.
 
 ## Questions ouvertes
 
@@ -76,15 +102,20 @@ Calcul de disponibilité (`WORKFLOW_CALCUL_DISPONIBILITE`, confiance high) : deu
 - **Superviseur** : y a-t-il un gestionnaire de process (PM2, Docker restart policy) au-dessus de `node src/server.js`, ou le crash de process rend-il le service down jusqu'à intervention manuelle ?
 - **Évolution architecturale** : le pilote sera-t-il renforcé (framework, router, validation) avant production, ou remplacé par une implémentation neuve ?
 
-## Prochaines étapes critiques
+## Dettes et recommandations
 
-1. **CORS** — ajouter `Access-Control-Allow-Origin` (`server.js:5-8`) — bloquant frontend.
+**Implémentées** ✓ :
+- Endpoints de réservation et annulation (SHIAAAAAAAAAAAAAAAAAAAAAAAA-61, SHIAAAAAAAAAAAAAAAAAAAAAAAA-353)
+- Filtre `?available=true` + fonction `isFull()` câblée (SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)
+
+**À traiter** :
+1. **CORS** — ajouter `Access-Control-Allow-Origin` (`server.js:5-8`) — bloquant frontend si API et UI sur origines différentes.
 2. **try/catch URL** — protéger le parsing à `server.js:11` — risque crash actif.
-3. **Endpoint de réservation** — décider format (POST /bookings vs. autre), persistance (BD, fichier, API), et intégration avec `isFull` pour la logique.
-4. **Tests HTTP** — couvrir `GET /transfers` et 404 (actuellement 0 tests du serveur).
+3. **Sémantique 409** — message `"Transfer full"` ambigu (couvre deux cas : complet vs. pas assez de places pour la demande).
+4. **Divergence `seatsLeft` / `availableSeats`** — l'API retourne `seatsLeft` ; le frontend probablement attend `availableSeats` (voir ECOSYSTEME.md).
 
 ---
 
-**Maturité** : Pilote de démonstration. Fonctionnel pour la consultation publique, incomplet pour un service opérationnel de réservation.
+**Maturité** : Pilote de démonstration. Fonctionnel pour consultation et réservation stateless, incomplet pour production (pas de persistance, pas d'authentification).
 
-**Confiance globale** : High. Le code source est petit, lisible, et les workflows/audits n'ont trouvé aucune incohérence entre implémentation et documentation.
+**Confiance globale** : High. Le code source est petit, lisible, et les workflows/audits ont validé la cohérence implémentation/documentation — trois endpoints (GET, POST, DELETE) et filtre de disponibilité câblés.

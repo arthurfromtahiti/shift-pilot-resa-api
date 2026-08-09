@@ -2,27 +2,27 @@
 
 ## Verdict global
 
-**Bon** — L'audit est exact, sourcé et bien calibré. Toutes les références de code vérifiées. Les statuts de preuve sont correctement employés. Les risques sont concrets et proportionnés à la taille du projet.
+**À corriger** — Les observations de code sont globalement exactes et bien référencées, mais deux inférences prospectives sont présentées comme des faits vérifiés et une affirmation de risque est trop large.
 
 ## Problèmes bloquants
 
-Aucun.
+**[BLOQUANT-1] Prévision de découpage qualifiée comme fait**
+
+Le constat `src/transfers.js:5-46` est vérifié : données, état et fonctions cohabitent. En revanche, « devra être découpé en au moins deux responsabilités » et « créera une rupture de contrat » décrivent une évolution future non observée. À qualifier `HYPOTHÈSE` (ou recommandation), car aucune persistance n'est présente dans le dépôt.
 
 ## Problèmes mineurs
 
-Aucun.
+**[MINEUR-1] Supply chain surqualifiée**
+
+« Aucune dépendance de production » est vérifié par `package.json:1-6`. « Aucune surface d'attaque via la chaîne de dépendances » ne découle pas de ce seul fait : le risque supply chain est réduit, non nul au sens général. Reformuler en risque réduit/absence de dépendances tierces déclarées.
 
 ## Points vérifiés et corrects
 
-- **Taille du codebase** : 51 lignes (`src/server.js`) + 30 lignes (`src/transfers.js`) = 81 lignes — "~80 lignes" exact. Vérifié par lecture directe.
-- **Séparation des couches** (`VÉRIFIÉ_CODE`, `src/transfers.js:1-30`, `src/server.js:1-51`) : aucune dépendance `http` dans `transfers.js`, aucun calcul métier dans `server.js`. Correct.
-- **Routage manuel** (`VÉRIFIÉ_CODE`, `src/server.js:10-44`) : deux blocs `if` testant `url.pathname` et `req.method` sans table de routes ni middleware. Correct.
-- **PORT configurable** (`VÉRIFIÉ_CODE`, `src/server.js:47`) : `process.env.PORT || 3100` — ligne 47 exacte.
-- **Export + garde `require.main`** (`VÉRIFIÉ_CODE`, `src/server.js:48`, `src/server.js:51`) : confirmé.
-- **Données + logique dans le même module** (`VÉRIFIÉ_CODE`, `src/transfers.js:3-7` et `9-27`) : confirmé.
-- **Risques qualifiés en `HYPOTHÈSE`** (scalabilité du routage) — calibrage correct : non mesuré mais structurellement inévitable si le service s'étend.
-- **Aucun secret recopié**. ✓
+- Séparation HTTP/domaine (`src/server.js:1-66`, `src/transfers.js:1-46`).
+- Trois blocs de routage (`src/server.js:13`, `25-26`, `50-51`).
+- Port, garde d'entrée et export (`src/server.js:62-66`).
+- Aucun secret recopié.
 
-## Recommandations de correction
+## Recommandation
 
-Néant.
+Séparer strictement faits observés et projections futures, puis resoumettre.
