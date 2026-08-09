@@ -2,7 +2,7 @@
 
 ## Verdict global
 
-**Bon** — Carte exacte, sourcée ligne par ligne, honnête sur ses limites. Toutes les affirmations ont été vérifiées dans le code source. La granularité (4 domaines) est appropriée pour un dépôt de ~80 lignes. Aucun défaut bloquant, aucune correction requise.
+**Bon** — La carte est exploitable sans réserve bloquante. Les quatre domaines sont réels, distincts à la granularité de ce dépôt minimal, correctement sourcés et la réconciliation SHIA-408 est conforme au code courant (`src/server.js:14-15`). Aucun domaine plaqué ni pan fonctionnel non couvert n'a été trouvé.
 
 ## Problèmes bloquants
 
@@ -15,34 +15,31 @@
 ## Points vérifiés et corrects
 
 **Contrôle 1 — Domaine `catalogue-transferts` prouvé.**
-Entité `transfers` vérifiée à `src/transfers.js:3-7` (tableau, champs `id`, `from`, `to`, `seats`, `sold`, `price`). Route `GET /transfers` vérifiée à `src/server.js:13-21`. Fonction `listTransfers()` à `src/transfers.js:9-11`. Indices de rattachement (`transfers`, `from`, `to`, `price`) circonscrits à ces deux fichiers — ils ne couvrent pas l'ensemble du dépôt.
+Le tableau et ses champs sont présents dans `src/transfers.js:5-9`, `listTransfers()` dans `src/transfers.js:13-15`, et la route de lecture dans `src/server.js:13-23`. Le filtre `available=true` est réellement câblé par `src/server.js:14-15` et couvert par `test/server.test.js:135-140`. Les indices (`transfers`, `from`, `to`, `price`, `available`) sont spécifiques aux fonctions et routes citées, pas des catégories génériques couvrant tout le dépôt.
 
 **Contrôle 2 — Domaine `disponibilite-reservation` prouvé.**
-`seatsLeft()` à `src/transfers.js:13-15`, `isFull()` à `src/transfers.js:17-19`, `bookSeats()` à `src/transfers.js:21-27`. Route `POST /transfers/:id/reserve` à `src/server.js:23-42`. Retour `{ ok, reason?, seatsLeft? }` confirmé : `{ ok: false, reason: "not_found" }` ligne 23, `{ ok: false, reason: "full" }` ligne 24, `{ ok: true, seatsLeft: ... }` ligne 26. Tests HTTP à `test/server.test.js:34-52` (200, 409, 404 confirmés).
+Les calculs et mutations sont vérifiables dans `src/transfers.js:17-43` : `seatsLeft`, `isFull`, `bookSeats`, `cancelReservation` et le registre `reservations`. Les trois chemins métier sont exposés par `src/server.js:13-23`, `src/server.js:25-48` et `src/server.js:50-57`. Les scénarios réservation/annulation, capacité, incohérence d'identifiant et double annulation sont couverts par `test/server.test.js:58-126` et `test/transfers.test.js:18-55`.
 
-**Contrôle 3 — Affirmation sur `isFull` « exporté mais mort côté runtime ».**
-`src/server.js:3` : `const { listTransfers, seatsLeft, bookSeats } = require("./transfers")` — `isFull` absent de l'import. Confirmé : `isFull` n'est importé que par `test/transfers.test.js:3` et utilisé aux lignes 9-12. La garde de complétude effective en production passe bien par `seatsLeft(transfer) < seats` à `src/transfers.js:24`, pas par `isFull()`. Description exacte.
+**Contrôle 3 — Domaine `exposition-http-api` réel et séparé.**
+La couche transverse est matérialisée par `http.createServer`, `sendJson`, le parsing d'URL/query, le routage, le parsing JSON et le port dans `src/server.js:1-66`. Elle ne constitue pas une entité métier et sa séparation du catalogue/réservation est donc justifiée.
 
-**Contrôle 4 — Fallback silencieux corps JSON malformé.**
-`src/server.js:31-35` : `body ? JSON.parse(body) : {}` avec catch → `seats = undefined`. Ligne 36 : `bookSeats(id, seats ?? 1)` → défaut à 1 en cas de corps vide ou invalide. Description exacte ; incertitude correctement signalée comme relevant de l'audit robustesse.
+**Contrôle 4 — Domaine `qualite-tests` réel.**
+Le script est défini dans `package.json:6`, les tests unitaires dans `test/transfers.test.js:1-56` et l'intégration HTTP dans `test/server.test.js:1-140`. Exécution effectuée pendant cette relecture : `npm test` → 21 tests, 21 pass, 0 fail. La confiance élevée annoncée pour cette suite est donc étayée par une observation reproductible, sans prétendre que les tests couvrent des exigences absentes.
 
-**Contrôle 5 — Domaine `exposition-http-api` séparé du métier.**
-`src/server.js` ne porte aucune entité métier — il délègue à `listTransfers`, `seatsLeft`, `bookSeats`. La séparation technique/métier est réelle et non artificielle.
+**Contrôle 5 — Granularité.**
+Quatre domaines pour ce dépôt de deux fichiers source sont dans la fourchette attendue et adaptés à la matière disponible. La séparation `catalogue-transferts` / `disponibilite-reservation` est défendable : le premier expose l'offre (`src/server.js:16-22`), le second porte le stock et les mutations (`src/transfers.js:17-43`). La carte signale honnêtement le chevauchement du filtre `available=true` (`CARTE_DES_DOMAINES.md:81-88`) au lieu de le masquer.
 
-**Contrôle 6 — Domaine `qualite-tests` prouvé.**
-`test/transfers.test.js:1-16` (3 tests logique pure), `test/server.test.js:1-52` (3 tests intégration HTTP avec vrai serveur). `package.json` : `"test": "node --test test/*.test.js"`. Confiance `medium` justifiée : couverture HTTP présente mais `GET /transfers` et corps malformé non testés — signalé dans les types de workflows attendus.
+**Contrôle 6 — Domaine central correct.**
+Le cœur fonctionnel annoncé est bien la réservation de sièges : `seats`, `sold`, `reservations` et les mutations sont dans `src/transfers.js:5-43`, et les routes métier correspondantes dans `src/server.js:25-57`. Aucun domaine d'authentification, persistance, notifications ou intégration externe n'a été inventé ; l'absence de base est cohérente avec `src/transfers.js:5-11` et l'absence de dépendances métier dans `package.json:1-6`.
 
-**Contrôle 7 — Granularité.**
-4 domaines pour ~80 lignes de source (2 fichiers : `src/transfers.js`, `src/server.js`). Limite basse de la grille (4-12), mais justifiée : dépôt volontairement minimal. La frontière `catalogue-transferts` / `disponibilite-reservation` est défendable (lecture/offre vs écriture/stock), honnêtement signalée comme incertitude, et renforcée par l'ajout de la route de réservation (SHIA-61).
+**Contrôle 7 — Couverture du dépôt et oublis.**
+J'ai parcouru `README.md`, `package.json`, `src/server.js`, `src/transfers.js`, `test/server.test.js` et `test/transfers.test.js`. Le README/stack sont reflétés dans la nature du projet (`README.md:3-7`), le code source est couvert par les domaines métier/technique, et les tests par `qualite-tests`. Aucun contrôleur, job, entité, persistance ou intégration non cartographié n'existe dans les fichiers suivis.
 
-**Contrôle 8 — Champ « Dépend de la base » honnête.**
-Tous les domaines à `non`. Vérifié : `src/transfers.js:3-7` (données codées en dur), `src/transfers.js:25` (`transfer.sold += seats` — mutation mémoire uniquement). Aucun ORM, aucun fichier de schéma, aucun signal de persistence. Correct.
+**Contrôle 8 — Champ « Dépend de la base ».**
+Les quatre valeurs `non` sont justes : les données sont un tableau en mémoire (`src/transfers.js:5-9`), les réservations une `Map` (`src/transfers.js:11`), et les mutations se font directement sur l'objet (`src/transfers.js:30`, `src/transfers.js:40-42`). Aucun schéma, ORM ou accès base n'apparaît dans le dépôt parcouru.
 
-**Contrôle 9 — Journal de réconciliation.**
-Confrontation canonique (pre-SHIA-61) vs code courant vérifiée : `bookSeats()` et `POST /transfers/:id/reserve` absents du code d'origine, présents à `src/transfers.js:21-27` et `src/server.js:23-42`. Les quatre lignes du tableau de réconciliation sont factuellement exactes.
-
-**Contrôle 10 — Couverture du dépôt (oublis ?).**
-Fichiers explorés : `src/transfers.js`, `src/server.js`, `test/transfers.test.js`, `test/server.test.js`, `package.json`, `README.md`. Chacun est couvert par au moins un domaine. Aucun pan non cartographié.
+**Contrôle 9 — Réconciliation et honnêteté des incertitudes.**
+Le drift SHIA-408 décrit dans la carte correspond exactement à l'import `isFull` (`src/server.js:3`), à son usage (`src/server.js:15`) et au test du filtre (`test/server.test.js:135-140`). Les limites restantes — mémoire volatile, absence d'authentification et concurrence — sont explicitement conservées comme incertitudes (`CARTE_DES_DOMAINES.md:84-88`) et ne sont pas présentées comme des capacités existantes.
 
 ## Recommandations de correction
 

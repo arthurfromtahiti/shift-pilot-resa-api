@@ -2,23 +2,22 @@
 
 ## Verdict global
 
-**Bon** — Les points chauds identifiés sont exacts et bien sourcés. Les statuts de preuve sont correctement appliqués. L'audit ne reproduit pas l'erreur de qualification de la race condition présente dans SECURITY_ROBUSTNESS_AUDIT : il se contente de la mentionner comme référence à un autre audit ("race condition possible, borne inférieure non protégée") sans lui attribuer un statut `VÉRIFIÉ_CODE` ici.
-
-## Problèmes bloquants
-
-Aucun.
+**À corriger** — Les points chauds et la qualification de la race condition sont correctement calibrés, mais une exclusivité factuelle est inexacte.
 
 ## Problèmes mineurs
 
-Aucun.
+**[MINEUR-1] « seul endroit » trop absolu**
+
+L'absence de garde autour de `transfers.find()` dans `src/transfers.js:40-41` est bien observée et le scénario est correctement marqué `HYPOTHÈSE`. En revanche, « le seul endroit du code qui pourrait théoriquement lever un crash TypeError » est trop absolu : `new URL(req.url, ...)` (`src/server.js:11`) peut aussi lever sur une entrée/base malformée. Dire « seul endroit identifié dans le chemin métier d'annulation ».
 
 ## Points vérifiés et corrects
 
-- **Zone POST couplée** (`VÉRIFIÉ_CODE`, `src/server.js:23-42`) : route matching, cast de `id`, collecte async du body, parsing JSON, appel métier, dispatch des réponses — tout dans 20 lignes. Confirmé. ✓
-- **`bookSeats` seule mutation** (`VÉRIFIÉ_CODE`, `src/transfers.js:21-27`) : unique point de mutation de `sold`. ✓
-- **`isFull` dead code en production** (`VÉRIFIÉ_CODE`, `src/transfers.js:17-19`) : exportée mais non importée dans `src/server.js:3` (qui importe `{ listTransfers, seatsLeft, bookSeats }` uniquement). Seule occurrence dans `test/transfers.test.js:9-11`. ✓
-- **Routage sans table de routes** (`VÉRIFIÉ_CODE`, `src/server.js:13` et `23`) : deux blocs `if` indépendants, ordre significatif. ✓
-- **Absence de timeout sur la lecture du body** (`VÉRIFIÉ_CODE`, `src/server.js:26-28`) : `req.on("data")` + `req.on("end")` sans timeout. Vecteur Slowloris confirmé par lecture du code. ✓
-- **Mutation irréversible dans `bookSeats`** (`VÉRIFIÉ_CODE`, `src/transfers.js:25`) : `transfer.sold += seats` sans rollback — correctement qualifié. ✓
-- **Extension de l'API via zone POST** qualifiée `HYPOTHÈSE` (pas encore de troisième endpoint) — calibrage correct. ✓
-- **Aucun secret recopié**. ✓
+- Couplage du POST (`src/server.js:25-48`).
+- Deuxième point de mutation dans `cancelReservation` (`src/transfers.js:36-44`).
+- `isFull()` réellement utilisée (`src/server.js:3`, `15`).
+- Absence de timeout du body (`src/server.js:29-30`) et risque qualifié selon le contexte.
+- Aucun secret recopié.
+
+## Recommandation
+
+Corriger l'absolu sur les lieux de crash ; le verdict peut ensuite être favorable.

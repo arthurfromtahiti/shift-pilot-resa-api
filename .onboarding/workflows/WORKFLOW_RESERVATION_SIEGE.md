@@ -8,12 +8,13 @@
 - **Acteurs** : Frontend Web (consommateur HTTP) · API Backend (`shift-pilot-resa-api`, ce dépôt)
 - **Criticité** : Haute — seul chemin de prise d'une réservation ; c'est le cœur fonctionnel de la promesse « resa » du produit
 - **Confiance** : high
-- **Justification** : Le code source est intégralement lu (`src/server.js:23-45`, `src/transfers.js:25-34`) et couvert par 3 tests d'intégration HTTP. Toutes les affirmations sont `VÉRIFIÉ_CODE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
+- **Justification** : Le code source est intégralement lu (`src/server.js:25-48`, `src/transfers.js:25-34`) et couvert par des tests d'intégration HTTP (200/400/404/409 + UUID — `test/server.test.js:58-102`). Aucun test ne couvre un corps JSON réellement malformé. Toutes les affirmations sur le code de l'API sont `VÉRIFIÉ_CODE`. Le risque de cluster (`:83`) est explicitement une `HYPOTHÈSE`. La mutation in-memory est observable ligne à ligne. Le comportement côté frontend n'est pas observable dans ce workspace.
+- **Journal de réconciliation** : [SHIA-408] Les 2 lignes de filtre `?available` insérées avant le bloc POST ont décalé tous les numéros de ligne `src/server.js` de +2 — mis à jour.
 - **Follow-up** : Voir WORKFLOW_ANNULATION_SIEGE.md pour l'annulation d'une réservation
 
 ## Objectif
 
-Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert spécifique identifié par son ID. Le service vérifie que le transfert existe et que la capacité est suffisante, puis décrémente les places disponibles en mémoire de manière immédiate et retourne le nouveau stock. C'est le seul chemin qui mute l'état du service.
+Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert spécifique identifié par son ID. Le service vérifie que le transfert existe et que la capacité est suffisante, puis décrémente les places disponibles en mémoire de manière immédiate et retourne le nouveau stock. C'est le seul chemin de prise d'une réservation ; l'annulation (`DELETE /transfers/:id/reservations/:reservationId`) constitue le second chemin de mutation d'état — voir WORKFLOW_ANNULATION_SIEGE.md.
 
 ## Acteurs
 
@@ -23,20 +24,20 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
 
 ## Points d'entrée
 
-- `POST /transfers/:id/reserve` — `src/server.js:23-24` (regex `/^\/transfers\/(\d+)\/reserve$/`, méthode POST)
-- Paramètre d'URL `:id` : entier capturé par `(\d+)`, parsé avec `parseInt(..., 10)` (`src/server.js:25`)
+- `POST /transfers/:id/reserve` — `src/server.js:25-26` (regex `/^\/transfers\/(\d+)\/reserve$/`, méthode POST)
+- Paramètre d'URL `:id` : entier capturé par `(\d+)`, parsé avec `parseInt(..., 10)` (`src/server.js:27`)
 - Corps JSON optionnel : `{ seats?: number }` (défaut 1)
 
 ## Étapes principales
 
 1. Le serveur HTTP `http.createServer` reçoit la requête (`src/server.js:10`).
 2. L'URL est parsée : `new URL(req.url, "http://" + req.headers.host)` (`src/server.js:11`).
-3. Le routage teste le regex `/^\/transfers\/(\d+)\/reserve$/` sur `url.pathname` **et** `req.method === "POST"` (`src/server.js:23-24`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:44`).
-4. L'ID est extrait et converti : `parseInt(reserveMatch[1], 10)` (`src/server.js:25`).
-5. Le corps HTTP est accumulé chunk par chunk : `req.on("data", chunk => body += chunk)` (`src/server.js:27-28`).
-6. À la fin du corps (`req.on("end", ...)`), le JSON est parsé avec `body ? JSON.parse(body) : {}` enveloppé dans un `try/catch` — un corps vide ou malformé produit `seats = undefined` sans erreur visible (`src/server.js:28-35`).
-7. Le serveur applique le défaut : `const seatsValue = seats ?? 1` (ligne 36), puis valide que `seatsValue` est un entier positif (ligne 37-39), rejette avec 400 et le message `"seats must be a positive integer"` si invalid.
-8. `bookSeats(id, seatsValue)` est appelé (`src/server.js:40`).
+3. Le routage teste le regex `/^\/transfers\/(\d+)\/reserve$/` sur `url.pathname` **et** `req.method === "POST"` (`src/server.js:25-26`). Si les deux conditions échouent, la requête tombe dans le 404 par défaut (`src/server.js:59`).
+4. L'ID est extrait et converti : `parseInt(reserveMatch[1], 10)` (`src/server.js:27`).
+5. Le corps HTTP est accumulé chunk par chunk : `req.on("data", chunk => body += chunk)` (`src/server.js:29-30`).
+6. À la fin du corps (`req.on("end", ...)`), le JSON est parsé avec `body ? JSON.parse(body) : {}` enveloppé dans un `try/catch` — un corps vide ou malformé produit `seats = undefined` sans erreur visible (`src/server.js:30-37`).
+7. Le serveur applique le défaut : `const seatsValue = seats ?? 1` (ligne 38), puis valide que `seatsValue` est un entier positif (ligne 39-41), rejette avec 400 et le message `"seats must be a positive integer"` si invalid.
+8. `bookSeats(id, seatsValue)` est appelé (`src/server.js:42`).
 9. Dans `bookSeats(transferId, seats)` (`src/transfers.js:25-34`) :
    - Valide que `seats > 0` et `Number.isInteger(seats)` (ligne 26)
    - Si invalid : retourne `{ ok: false, reason: "invalid_seats" }`
@@ -48,20 +49,20 @@ Permettre à un client web de réserver N sièges (défaut : 1) sur un transfert
    - Génère `reservationId = randomUUID()` (ligne 31)
    - Enregistre `reservations.set(reservationId, { transferId, seats })` (ligne 32)
    - Retourne `{ ok: true, reservationId, seatsLeft: seatsLeft(transfer) }` (ligne 33)
-10. Mappage résultat → réponse HTTP (`src/server.js:41-43`) :
+10. Mappage résultat → réponse HTTP (`src/server.js:43-45`) :
    - `reason: "not_found"` → `sendJson(res, 404, { error: "Transfer not found" })`
    - `reason: "full"` → `sendJson(res, 409, { error: "Transfer full" })`
    - `ok: true` → `sendJson(res, 200, { reservationId: result.reservationId, transferId: id, seatsLeft: result.seatsLeft })`
 
 ## Règles métier
 
-- **Validation stricte de `seats`** : `seats` doit être un entier positif (`Number.isInteger(seats) && seats >= 1`), sinon rejet 400 (`src/server.js:37-39` et `src/transfers.js:26`). Validation dupliquée (prototypage).
+- **Validation stricte de `seats`** : `seats` doit être un entier positif (`Number.isInteger(seats) && seats >= 1`), sinon rejet 400 (`src/server.js:39-40` et `src/transfers.js:26`). Validation dupliquée (prototypage).
 - **Garde de capacité** : `seatsLeft(transfer) < seats` → rejet 409 (`src/transfers.js:29`). La condition est stricte (`<`), donc réserver exactement les places restantes est accepté (`seatsLeft === seats` passe).
 - **Existence du transfert** : si `transfers.find()` retourne `undefined`, le transfert n'existe pas → rejet 404 (`src/transfers.js:27-28`).
 - **Génération UUID** : chaque réservation acceptée génère un UUID unique via `crypto.randomUUID()` (ligne 31). L'UUID est retourné au client et stocké dans le registre.
 - **Mutation immédiate et synchrone** : `transfer.sold += seats` et `reservations.set(...)` s'exécutent dans le même tick — aucun délai, aucune confirmation différée (`src/transfers.js:30-32`).
 - **Mutation réversible** : le registre `reservations` permet une annulation ultérieure via `cancelReservation()` en retrouvant les seats à libérer. Voir WORKFLOW_ANNULATION_SIEGE.md.
-- **Corps JSON malformé retourne 400** : si le corps JSON ne parse pas ou `seats` n'est pas un entier positif, le serveur retourne 400 (ligne 37-39), pas une valeur par défaut silencieuse.
+- **Corps JSON malformé : comportement tolérant** : si le corps ne parse pas (`JSON.parse` lève une exception), le `catch` (`src/server.js:35-37`) affecte `seats = undefined` ; la ligne 38 (`seats ?? 1`) applique alors la valeur par défaut `seatsValue = 1`. Pour un transfert disponible, un corps malformé (ex. `{`) aboutit à une réservation d'1 siège avec réponse **200**, pas 400. Le rejet 400 n'intervient que si `seats` est présent mais invalide (0, -1, 1.5) (`src/server.js:39-40`). Aucun test de corps malformé n'est présent dans `test/server.test.js`.
 
 ## Données
 
@@ -79,7 +80,7 @@ Aucune intégration externe explicite visible. Toute la logique est in-process e
 
 ## Risques
 
-- **Race condition sur le dernier siège** (`HYPOTHÈSE — mode cluster uniquement`) : dans la configuration actuelle (process Node.js unique), la garde `seatsLeft(transfer) < seats` et la mutation `transfer.sold += seats` sont exécutées de manière **synchrone** dans le même callback `req.on("end", ...)`, sans `await` ni I/O entre elles (`src/server.js:28-39`, `src/transfers.js:25-34`). Le modèle single-threaded de Node.js garantit qu'aucun autre callback ne peut s'intercaler entre la garde et la mutation : la race condition est **impossible en process unique**. Elle deviendrait réelle uniquement en mode cluster Node.js (plusieurs workers partageant un état commun), qui n'est ni configuré ni documenté dans ce dépôt.
+- **Race condition sur le dernier siège** (`HYPOTHÈSE — mode cluster uniquement`) : dans la configuration actuelle (process Node.js unique), la garde `seatsLeft(transfer) < seats` et la mutation `transfer.sold += seats` sont exécutées de manière **synchrone** dans le même callback `req.on("end", ...)`, sans `await` ni I/O entre elles (`src/server.js:30-42`, `src/transfers.js:25-34`). Le modèle single-threaded de Node.js garantit qu'aucun autre callback ne peut s'intercaler entre la garde et la mutation : la race condition est **impossible en process unique**. Elle deviendrait réelle uniquement en mode cluster Node.js (plusieurs workers partageant un état commun), qui n'est ni configuré ni documenté dans ce dépôt.
 - **Perte totale de données au redémarrage** (`VÉRIFIÉ_CODE`) : `transfer.sold` est in-memory (`src/transfers.js:5-9`). Un redémarrage du process réinitialise le catalogue à ses valeurs codées en dur. Aucune persistance sur disque ni base de données.
 - **Pas d'authentification** : n'importe quel appelant HTTP peut réserver des sièges, potentiellement autant de fois qu'il veut, sans identité ni quota. La contrainte est uniquement la capacité totale du transfert.
 - **Absence de notification asynchrone** : la réservation est confirmée par la réponse 200, mais aucun mail, SMS ou webhook n'est déclenché. L'utilisateur final ne reçoit aucune confirmation hors de l'interface web.
@@ -92,7 +93,7 @@ Aucune intégration externe explicite visible. Toute la logique est in-process e
 
 ## Preuves
 
-- `src/server.js:23-45` — routage POST, validation ID, parsing JSON, validation seats, appel `bookSeats`, mappage résultats → statuts HTTP
+- `src/server.js:25-48` — routage POST, validation ID, parsing JSON, validation seats, appel `bookSeats`, mappage résultats → statuts HTTP
 - `src/transfers.js:25-34` — `bookSeats()` : validation, recherche, gardes, mutation `transfer.sold`, génération UUID, enregistrement Map, retour
 - `src/transfers.js:11` — `reservations` Map (registre de suivi)
 - `src/transfers.js:17-19` — `seatsLeft(transfer)` (utilisé dans `bookSeats`)

@@ -2,24 +2,28 @@
 
 ## Verdict global
 
-**Bon** — Tous les constats sont exacts, les références de code sont vérifiées ligne par ligne. Les statuts de preuve sont correctement calibrés. Les risques sont proportionnés et liés à des observations précises.
+**À corriger** — Le modèle est décrit fidèlement, mais un risque d'invariant est mal statué et une formulation inverse est factuellement trompeuse.
 
 ## Problèmes bloquants
 
-Aucun.
+**[BLOQUANT-1] Violation d'invariant présentée comme `VÉRIFIÉ_CODE`**
+
+Le code vérifie les entrées de `bookSeats` (`src/transfers.js:26-30`) et `reservations` est privée au module (`src/transfers.js:11`). Le scénario « UUID dont `seats` stocké est erroné » n'est pas observé dans le dépôt ; c'est une corruption d'état hypothétique. Le risque doit être `HYPOTHÈSE`, avec la preuve limitée à l'absence de contrainte structurelle.
 
 ## Problèmes mineurs
 
-Aucun.
+**[MINEUR-1] « opérations irréversibles »**
+
+Le texte affirme que les deux mutations sont « irréversibles sans redémarrage ». Une réservation créée par `bookSeats` peut précisément être inversée par `cancelReservation` (`src/transfers.js:36-43`). Parler de mutations en mémoire et d'état volatil, pas d'irréversibilité.
 
 ## Points vérifiés et corrects
 
-- **Structure de l'entité `transfer`** (`VÉRIFIÉ_CODE`, `src/transfers.js:3-7`) : `{ id, from, to, seats, sold, price }` — exact. Seul `sold` est muté (`src/transfers.js:25`). ✓
-- **Catalogue statique codé en dur** (`VÉRIFIÉ_CODE`) : aucune lecture de fichier ou base de données. Confirmé par absence d'import autre que les fonctions internes. ✓
-- **Transfert 2 pré-complet** (`VÉRIFIÉ_CODE`, `src/transfers.js:5`) : `{ id: 2, ..., seats: 60, sold: 60 }` — exact, et `test/server.test.js:42` confirme l'usage de test. ✓
-- **Invariant géré par code** (`VÉRIFIÉ_CODE`, `src/transfers.js:24`) : la garde `seatsLeft(transfer) < seats` est la seule protection. Aucune contrainte structurelle. ✓
-- **IDs manuels** (`VÉRIFIÉ_CODE`, `src/transfers.js:3-7`) : `1`, `2`, `3` assignés à la main. Aucun générateur. ✓
-- **Volatilité totale** (`VÉRIFIÉ_CODE`) : `sold` muté en mémoire, réinitialisé au redémarrage. ✓
-- **Mutation unique dans `bookSeats`** (`VÉRIFIÉ_CODE`, `src/transfers.js:25`) : seul point de mutation de `sold`. ✓
-- **Projection correcte** (`src/server.js:14-20`) : `seats` et `sold` masqués dans la réponse publique. ✓
-- **Aucun secret recopié**. ✓
+- Forme des transferts et Map (`src/transfers.js:5-11`).
+- Deux mutations de `sold` (`src/transfers.js:30`, `41`).
+- Volatilité au redémarrage et seed complet id 2 (`src/transfers.js:7`).
+- Projection API (`src/server.js:16-22`).
+- Aucun secret recopié.
+
+## Recommandation
+
+Abaisser le scénario de corruption en `HYPOTHÈSE` et corriger l'assertion d'irréversibilité.

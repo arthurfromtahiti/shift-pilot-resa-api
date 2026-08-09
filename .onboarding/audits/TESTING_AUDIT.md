@@ -1,63 +1,92 @@
 # Tests — Audit
 
 > Confiance : high
+> Mode : RÉCONCILIATION SHIA-571 (HEAD `8a108d1`). 21 tests, 21 pass, 0 fail — confirmé par exécution de `npm test` (`node --test test/*.test.js`) sur le checkout courant par l'agent relecteur (état HEAD `8a108d1`).
 
 ## Compréhension globale
 
-Le projet dispose de deux fichiers de tests couvrant à la fois la logique métier pure et le comportement HTTP. La couverture nominale (les 3 cas POST documentés dans les workflows) est assurée. Mais des angles entiers restent non testés : le endpoint GET /transfers n'a aucun test HTTP, les cas limites de `seats` (négatif, nul, non-entier) sont absents, et les tests partagent un état global mutable sans isolation.
+Le projet dispose de deux fichiers de tests couvrant la logique métier pure et le comportement HTTP de bout en bout. La suite a été étoffée au fil des évolutions (SHIA-396 : annulation ; SHIA-408 : filtre disponibilité). Elle compte désormais **21 tests, 21 pass, 0 fail** (exécution vérifiée par `npm test` sur le checkout courant). Les lacunes documentées dans la version initiale de cet audit (pas de test `GET`, pas de cas limites `seats`, `bookSeats` non testé directement) ont été comblées. Il reste une fragilité structurelle d'isolation de l'état.
 
 ## Résumé exécutif
 
-Six tests au total, répartis sur deux fichiers. Trois tests unitaires (`test/transfers.test.js`) couvrent les fonctions pures `seatsLeft`, `isFull` et `listTransfers`. Trois tests d'intégration HTTP (`test/server.test.js`) couvrent les trois cas nominaux de `POST /transfers/:id/reserve` (200, 409, 404). La couverture est cohérente avec ce que les workflows documentent comme cas de test, mais elle présente trois lacunes structurelles : (1) `GET /transfers` n'a aucun test HTTP ; (2) aucun cas limite sur `seats` (négatif, nul, non-entier) n'est testé — ce qui laisse le bug de validation documenté dans l'audit sécurité non détecté par la suite automatique ; (3) le test T1 mute l'état global en réservant un siège sur le transfert 1, ce qui rend la suite non idempotente si l'ordre des tests changeait ou si T1 était relancé sans redémarrage du serveur.
+**21 tests** répartis sur deux fichiers. `test/transfers.test.js` (9 tests) couvre les fonctions pures `seatsLeft`, `isFull`, `listTransfers`, `bookSeats` (validation + reservationId) et `cancelReservation` (nominal, ID inconnu, transferId incohérent, double-annulation). `test/server.test.js` (12 tests) couvre `POST /reserve` (200/409/404/400 × 3 variantes), `DELETE /reservations/:id` (200/404 dont transferId incorrect), `GET /transfers` (200 + filtre `?available=true`). La couverture est devenue solide. La dette résiduelle principale est l'isolation d'état : les tests mutent un état global partagé, et plusieurs assertions reposent sur les valeurs initiales du catalogue — si l'ordre d'exécution changeait, certains tests échoueraient.
 
 ## Constats détaillés
 
-**`test/transfers.test.js` — tests unitaires de logique pure (`VÉRIFIÉ_CODE`)** : trois tests, 17 lignes. Ils testent `seatsLeft` avec des valeurs arbitraires (`{ seats: 40, sold: 12 }`, ligne 6), `isFull` sur un transfert complet et non complet (lignes 9-11), et `listTransfers` pour vérifier le count de 3 (ligne 14). Ces tests n'utilisent pas les données du catalogue réel — ils construisent leurs propres fixtures inline. Ils sont idempotents (pas de mutation) et n'ont aucune dépendance entre eux.
+**`test/transfers.test.js` — 9 tests unitaires (`VÉRIFIÉ_CODE`)** : teste `seatsLeft` avec fixture inline (ligne 5-7), `isFull` sur deux cas (lignes 9-12), `listTransfers` en vérifiant le count (lignes 14-16), `bookSeats` avec valeurs invalides `0 / -1 / 1.5 / "2"` (lignes 18-23), `bookSeats` en succès avec vérification du type de `reservationId` (lignes 25-31), `cancelReservation` en succès avec vérification du delta de places (lignes 33-39), `cancelReservation` sur ID inconnu (lignes 41-43), `cancelReservation` quand le `transferId` ne correspond pas à la réservation (lignes 44-50 — nettoyage inclus), et double-annulation de la même réservation (lignes 52-56). Les tests de `cancelReservation` utilisent le transfert 3 et nettoient leur état via une annulation ou en vérifiant que l'opération échoue.
 
-**`test/server.test.js` — tests d'intégration HTTP (`VÉRIFIÉ_CODE`)** : trois tests, 53 lignes. Le serveur est démarré sur un port éphémère (`server.listen(0)`, ligne 9) et fermé après (`server.close()`, ligne 15). T1 (ligne 34-40) POST sur le transfert 1 et vérifie `seatsLeft: 27` — ce test **mute** `transfer.sold` de 12 à 13 dans l'état global. T2 (ligne 42-46) POST sur le transfert 2 (complet) et vérifie 409. T3 (ligne 48-52) POST sur le transfert 999 (inexistant) et vérifie 404. Les tests T2 et T3 ne mutent pas d'état. T1 oui.
+**`test/server.test.js` — 12 tests d'intégration HTTP (`VÉRIFIÉ_CODE`)** : le serveur démarre sur un port éphémère (`server.listen(0)`, ligne 9) et se ferme après (`server.close()`, ligne 15). Les tests couvrent :
+- `POST /transfers/1/reserve` → 200, `seatsLeft: 27` (ligne 58-64) — mute l'état du transfert 1
+- `POST /transfers/2/reserve` (complet) → 409 (lignes 66-70)
+- `POST /transfers/999/reserve` (inexistant) → 404 (lignes 72-76)
+- `POST /transfers/3/reserve seats: 0` → 400 (lignes 78-82)
+- `POST /transfers/3/reserve seats: -1` → 400 (lignes 84-88)
+- `POST /transfers/3/reserve seats: 1.5` → 400 (lignes 90-94)
+- `POST /reserve` retourne un `reservationId` typé string non vide (lignes 96-102)
+- `DELETE /reservations/:id` → 200 avec `seatsLeft` correct (book 2 + cancel, delta vérifié, lignes 104-111)
+- `DELETE /reservations/unknown` → 404 (lignes 113-117)
+- `DELETE /transfers/:wrongId/reservations/:id` → 404 + nettoyage (lignes 119-126)
+- `GET /transfers` → 200, 3 transferts, `seatsLeft` typé (lignes 128-133)
+- `GET /transfers?available=true` → exclut le transfert complet id=2, tous `seatsLeft > 0` (lignes 135-140)
 
-**Mutation d'état partagé entre tests (`VÉRIFIÉ_CODE`)** : `test/server.test.js:34-40` (T1) appelle `POST /transfers/1/reserve` avec un body `{}` (`JSON.stringify({})` = `"{}"` — le body envoyé est la chaîne `"{}"`, pas une chaîne vide ; `parsed.seats` est `undefined`, donc `seats ?? 1` vaut `1`), ce qui exécute `bookSeats(1, 1)` et incrémente `transfer.sold` de 12 à 13 dans le tableau global `transfers`. Si T1 est rejoué sans redémarrage du serveur (ex. dans un watch mode, ou si `node:test` rejoue les échecs), le `seatsLeft` attendu (27) ne correspondra plus — le test échouera. Si les tests étaient réordonnés et que T1 passait après un autre test qui réserve aussi sur le transfert 1, la même désynchronisation se produirait.
+**Mutation d'état partagé — fragilité résiduelle (`VÉRIFIÉ_CODE`)** : `server.test.js:63` (`assert.equal(res.body.seatsLeft, 27)`) est une assertion absolue — elle suppose que `transfer.sold` vaut `12` au démarrage du test. Cela fonctionne uniquement parce que : (a) `server.test.js` s'exécute avant `transfers.test.js` dans l'ordre alphabétique du glob `test/*.test.js` ; (b) aucun test précédent dans `server.test.js` ne touche le transfert 1. Si l'ordre changeait ou si un nouveau test était inséré avant, cette assertion échouerait sans message d'erreur clair. La fragilité n'est pas hypothétique mais structurelle — elle repose sur l'ordre d'exécution implicite.
 
-**`GET /transfers` sans aucun test HTTP (`VÉRIFIÉ_CODE`)** : `test/server.test.js` ne contient aucun `test("GET /transfers...")`. Le endpoint `src/server.js:13-21` — qui est le premier endpoint livré et le plus critique fonctionnellement pour le frontend — n'est couvert que par les tests unitaires de `listTransfers` (qui tesent la fonction métier, pas le comportement HTTP). Le statut de réponse, le format JSON (`id, from, to, price, seatsLeft`), et la projection correcte des champs (masquage de `seats` et `sold`) ne sont pas vérifiés par un test automatisé.
+**Accumulation de `sold` sur le transfert 3 (`VÉRIFIÉ_CODE`)** : plusieurs tests (unitaires dans `transfers.test.js` et HTTP dans `server.test.js`) réservent sur le transfert 3 sans toujours annuler. Le total de `sold` après l'intégralité des 21 tests est supérieur à la valeur initiale (5). Les tests qui portent des assertions relatives (delta de places) restent corrects, mais si un test échouait au milieu d'une paire book+cancel, le catalogue se retrouverait dans un état inattendu pour les tests suivants.
 
-**Cas limites de `seats` non testés (`VÉRIFIÉ_CODE`)** : aucun test ne vérifie le comportement avec `seats: 0` (réservation nulle), `seats: -1` (réservation négative créant des places), `seats: 2.5` (non-entier), ou `seats: 100` (dépassement de capacité alors qu'il reste 28 places). Ces cas sont documentés comme problématiques dans l'audit sécurité mais ne sont pas couverts par la suite automatique. Leur absence signifie que le bug `seats: -1` ne serait pas détecté par `npm test`.
+**Lacunes résiduelles (`VÉRIFIÉ_CODE`)** :
+- Pas de test pour le cas où `bookSeats` reçoit un `seats` supérieur à la capacité disponible sur un transfert non complet (ex. 100 sièges sur le transfert 1 qui en a 28 de libres) — la logique `seatsLeft < seats` est testée via le 409 sur le transfert 2, mais toujours en testant le cas extrême (transfert plein) plutôt que le dépassement partiel.
+- La protection de `cancelReservation` contre un `transfer` non trouvé à la ligne 40 de `src/transfers.js` n'est pas testée directement (impossible dans le flow normal, mais pas couvert explicitement).
 
-**`bookSeats` sans test unitaire direct (`VÉRIFIÉ_CODE`)** : `test/transfers.test.js` teste `listTransfers`, `seatsLeft` et `isFull`, mais pas `bookSeats`. Le comportement de `bookSeats` est testé indirectement via les tests HTTP dans `test/server.test.js`, mais les cas logiques (retour `not_found`, retour `full`, mutation de `sold`) ne sont pas vérifiés séparément du comportement HTTP.
-
-**Stack de test standard et légère (`VÉRIFIÉ_CODE`)** : `node:test` et `node:assert/strict` (stdlib Node.js) — aucune dépendance de test externe. La commande `node --test test/*.test.js` dans `package.json` (ligne 6, clé `"scripts"`) est directe. Le pattern d'intégration HTTP (démarrage sur port 0, `before`/`after`) est correct et idiomatique.
+**Stack de test (`VÉRIFIÉ_CODE`)** : `node:test` et `node:assert/strict` (stdlib Node.js) — aucune dépendance de test externe. La commande `node --test test/*.test.js` dans `package.json:6` est directe. Le pattern d'intégration HTTP (port 0, `before`/`after`) est correct et idiomatique.
 
 ## Forces
 
-- **Tests d'intégration HTTP réels** : les tests POST démarrent une vraie instance du serveur sur un port éphémère et font de vraies requêtes HTTP — pas de mocking de `http`, pas de substitut. Le comportement de bout en bout (parsing, dispatch, réponse) est effectivement exercé (`test/server.test.js:8-52`).
-- **Couverture des 3 cas nominaux POST** : 200 (succès), 409 (complet), 404 (inexistant) sont tous les trois couverts, ce qui correspond exactement aux cas documentés dans WORKFLOWS.md (scénarios T1-T3).
-- **Aucune dépendance de test externe** : `node:test` et `node:assert/strict` suffisent. Zéro configuration de test à maintenir.
+- **Couverture de bout en bout complète** : les 3 endpoints (`GET /transfers` avec son filtre optionnel `?available=true`, `POST /reserve`, `DELETE /reservations/:id`) sont tous exercés par des tests HTTP démarrant un vrai serveur (`test/server.test.js`). Le filtre est un paramètre de requête, pas un endpoint distinct — 3 routes, non 4. Pas de mocking de `http`.
+- **Cas limites de `seats` couverts** : `0`, `-1`, `1.5` sont tous testés avec vérification du 400 (`test/server.test.js:78-94`). Un bug sur la validation serait détecté.
+- **`cancelReservation` bien couverte** : nominal, ID inconnu, transferId incohérent, double-annulation — 4 cas unitaires + 3 cas HTTP.
+- **`bookSeats` a des tests unitaires directs** : `test/transfers.test.js:18-31` teste la validation et le retour de reservationId séparément du comportement HTTP.
+- **Aucune dépendance de test externe** : zéro configuration à maintenir.
 
 ## Dettes techniques
 
-- **`GET /transfers` non couvert par un test HTTP** : le seul endpoint de lecture n'a pas de test d'intégration — comportement HTTP, format JSON, projection des champs non vérifiés (`src/server.js:13-21`).
-- **Cas limites de `seats` absents** : `seats ≤ 0`, `seats` non-entier, `seats` dépassant la capacité disponible ne sont pas testés — le bug sécurité `seats: -1` n'est pas détectable par la suite actuelle.
-- **État global muté sans isolation** : T1 modifie `transfer.sold` du transfert 1 ; si le test est rejoué ou réordonné, les assertions sur `seatsLeft` peuvent échouer (`test/server.test.js:34-40`).
-- **`bookSeats` sans test unitaire** : la fonction la plus critique du point de vue métier n'a pas de tests directs — ses comportements sont vérifiés uniquement à travers la couche HTTP.
+- **Isolation de l'état globale insuffisante** : l'état du catalogue est partagé entre tous les tests, sans `beforeEach`/`afterEach` de remise à zéro. Les assertions absolues (ex. `seatsLeft: 27`) reposent sur l'ordre d'exécution implicite — source de fragilité si les tests sont réordonnés ou rejoués.
+- **Test de dépassement partiel manquant** : le cas "moins de places disponibles que demandées, mais transfert non complet" n'a pas de test dédié. Le comportement est couvert par la logique de `bookSeats` mais pas validé par un cas de test explicite.
 
 ## Zones critiques
 
-- **`test/server.test.js:34-40`** (T1) : test qui mute l'état global, source d'instabilité potentielle si rejoué.
-- **Absence de tests pour `GET /transfers`** : zone complète non couverte côté HTTP.
+- **`test/server.test.js:63`** : assertion absolue `seatsLeft: 27` — point de fragilité le plus direct. Un nouveau test inséré avant qui réserve sur le transfert 1 cassera ce test sans rapport avec le code métier.
+- **`test/transfers.test.js:25-31`** (`bookSeats retourne un reservationId`) : réserve sur le transfert 3 sans annuler — contribue à l'accumulation de `sold` sur ce transfert tout au long de la suite.
 
 ## Risques
 
-- **Bug `seats: -1` non détectable par la suite de tests** : un développeur qui corrige ou modifie `bookSeats` n'a aucun test lui indiquant que les valeurs négatives sont invalides — le bug peut se réintroduire sans signal automatique — `VÉRIFIÉ_CODE`.
-- **Régression silencieuse sur `GET /transfers`** : une modification du format de réponse (ex. renommer `seatsLeft` en `availableSeats`) passerait sans erreur de test — `VÉRIFIÉ_CODE`.
-- **Flakiness potentielle de T1 en mode watch/retry** : si le test T1 est relancé sans redémarrage du serveur, `seatsLeft` ne sera plus 27 — le test échouera et son diagnostic sera trompeur — `HYPOTHÈSE` (dépend du runner utilisé).
+- **Flakiness en mode watch ou retry** : si `node:test` rejoue un test échoué sans redémarrer le process (dépend du runner), les assertions absolues sur `seatsLeft` s'exécutent dans un état divergent — `HYPOTHÈSE` (comportement dépendant du runner).
+- **Fragilité à l'insertion de nouveaux tests** : tout nouveau test réservant sur le transfert 1 avant `test/server.test.js:58` casse l'assertion `seatsLeft: 27` — `VÉRIFIÉ_CODE` (structure de la suite actuelle).
+- **Dépassement de capacité du transfert 3 en cas de suites étendues** : si de nombreux tests réservent sur le transfert 3 (seats: 20, sold: 5 initial, seatsLeft initial=15), la capacité peut s'épuiser pour les tests tardifs — `HYPOTHÈSE` (à vérifier si la suite s'étend).
 
 ## Recommandations priorisées
 
-1. **Ajouter un test HTTP pour `GET /transfers`** : vérifier le statut 200, le type de réponse, et au moins la structure d'un objet retourné (`id`, `from`, `to`, `price`, `seatsLeft` présents, `seats` et `sold` absents). Priorité : **haute** (endpoint critique non couvert).
-2. **Ajouter des tests pour les cas limites de `seats`** dans `test/server.test.js` ou `test/transfers.test.js` : `seats: 0` (attendu : 400 ou rejet), `seats: -1` (attendu : 400 ou rejet), `seats: 100` sur le transfert 1 (attendu : 409). Ces tests documenteront le comportement attendu et détecteront le bug actuel. Priorité : **haute**.
-3. **Ajouter des tests unitaires pour `bookSeats`** dans `test/transfers.test.js` : `bookSeats` sur un ID inexistant, sur un transfert complet, sur un transfert valide — séparément du comportement HTTP. Priorité : **moyenne**.
-4. **Isoler l'état entre les tests HTTP** : soit réinitialiser `transfer.sold` dans un `beforeEach`/`afterEach`, soit reconstruire le catalogue à chaque test. Cela évite la dépendance d'ordre. Priorité : **moyenne**.
+1. **Isoler l'état du catalogue entre les tests** : ajouter un mécanisme de remise à zéro (`sold` initial) dans un `beforeEach` ou après chaque test mutatif. Priorité : **moyenne** (la suite passe actuellement, mais chaque ajout de test augmente le risque de fragilité).
+2. **Ajouter un test de dépassement partiel** : `POST /transfers/1/reserve` avec `seats: 30` (seatsLeft=27 après le premier test, donc 30 dépasse la capacité) → 409. Priorité : **basse** (la logique est couverte implicitement, mais le cas nominal est absent).
+3. **Documenter l'ordre d'exécution dans le commentaire du test T1** : noter explicitement que `seatsLeft: 27` suppose `sold: 12` au démarrage, et qu'aucun autre test ne doit réserver sur le transfert 1 avant ce test. Priorité : **basse** (commentaire préventif, pas de correction fonctionnelle).
 
 ## Questions ouvertes
 
-- Le test T1 est-il conçu pour s'exécuter dans un ordre défini et une seule fois ? Si oui, est-ce documenté quelque part ?
-- Y a-t-il une intention de passer à un framework de test (Jest, Vitest) qui offrirait des `beforeEach`/`afterEach` plus expressifs et une isolation native ?
+- Y a-t-il une intention de passer à un framework de test (Jest, Vitest) offrant des `beforeEach`/`afterEach` isolants ? `node:test` supporte des hooks mais pas l'isolation de module par défaut.
+- Le test de double-annulation est couvert en unitaire (`test/transfers.test.js:52-56`) mais pas en HTTP (`test/server.test.js`). Est-ce intentionnel ?
+
+## Journal de réconciliation
+
+| Élément | Version précédente | Version actuelle (HEAD `8a108d1`) | Action |
+|---|---|---|---|
+| Nombre de tests | 6 (3 unitaires + 3 HTTP) | **21 (9 unitaires + 12 HTTP)** | Mis à jour — évolution majeure |
+| `GET /transfers` sans test HTTP | Lacune documentée | **Comblée** — `test/server.test.js:128-133` | Lacune **retirée** |
+| Filtre `?available=true` | Absent | **Testé** — `test/server.test.js:135-140` | **Ajouté** |
+| Cas limites `seats` | Lacune documentée | **Comblée** — `test/server.test.js:78-94` | Lacune **retirée** |
+| `bookSeats` sans test unitaire direct | Lacune documentée | **Comblée** — `test/transfers.test.js:25-31` | Lacune **retirée** |
+| `cancelReservation` | Inexistant | **4 tests unitaires** + **3 tests HTTP** | **Ajouté** |
+| `DELETE` endpoint HTTP | Inexistant | **3 tests** (200/404/404 wrong id) | **Ajouté** |
+| `reservationId` dans la réponse | Non testé | **Testé** — `test/server.test.js:96-102` | **Ajouté** |
+| Double-annulation | Non testé | **Testé unitaire** — `test/transfers.test.js:52-56` | **Ajouté** |
+| Fragilité état partagé | Documentée (T1 sur transfert 1) | **Étendue** : plus de tests mutent l'état | Risque **étendu** |
+| package.json ligne 6 | Erreur de numéro de ligne (relecture SHIA-353) | **Confirmé** : ligne 6 | Confirmé |
+| Nombre d'endpoints | « 4 endpoints » (GET×2 + POST + DELETE) | **3 endpoints** : GET /transfers est un seul endpoint avec filtre optionnel `?available=true` — filtre = query param, pas une route distincte (`VÉRIFIÉ_CODE`) | **Corrigé post-relecture SHIA-571** |
