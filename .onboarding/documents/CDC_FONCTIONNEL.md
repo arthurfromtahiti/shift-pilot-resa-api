@@ -42,7 +42,7 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 1. Client HTTP envoie `GET /transfers` au serveur.
 2. Serveur reçoit la requête, valide qu'il s'agit de la bonne route et de la bonne méthode (`pathname === "/transfers" && method === "GET"` — `server.js:13`).
 3. Serveur appelle `listTransfers()` qui retourne le tableau en mémoire des 3 transferts avec tous leurs champs (`transfers.js:3-7`).
-4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:14-20`).
+4. Pour chaque transfert, le serveur construit une projection réduite : `{ id, from, to, price, seatsLeft }` en omettant `seats` et `sold` (données internes — `server.js:16-22`).
 5. Le calcul de `seatsLeft` pour chaque transfert s'effectue par `seatsLeft(transfer) = transfer.seats - transfer.sold` (`transfers.js:13-15`).
 6. Serveur sérialise le tableau projeté en JSON et l'envoie au client avec statut 200 et header `Content-Type: application/json` (`server.js:5-8`).
 
@@ -108,18 +108,19 @@ Clients visés : voyageurs cherchant un trajet inter-îles, pas de restrictions 
 
 **Déroulement** :
 
-1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:48-54`).
-2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:48`), extrait l'ID du transfert (non utilisé) et l'UUID, s'assure que la méthode est DELETE (`server.js:49`).
-3. Serveur extrait `reservationId` du groupe regex 2 (`server.js:50`).
-4. Serveur appelle `cancelReservation(reservationId)` (`server.js:51`, `transfers.js:36-43`).
+1. Client HTTP envoie `DELETE /transfers/{id}/reservations/{reservationId}` au serveur (pas de body) (`server.js:50-57`).
+2. Serveur reçoit la requête, valide la route via regex `/^\/transfers\/(\d+)\/reservations\/([^/]+)$/` (`server.js:50`), extrait l'ID du transfert et l'UUID, s'assure que la méthode est DELETE (`server.js:51`).
+3. Serveur extrait `transferId` et `reservationId` (`server.js:52-53`).
+4. Serveur appelle `cancelReservation(reservationId, transferId)` (`server.js:54`, `transfers.js:36-44`) avec les deux paramètres.
 5. Dans `cancelReservation()` :
    - Recherche la réservation dans le registre Map (`reservations.get(reservationId)`) (`transfers.js:37`), rejette 404 si non trouvée.
-   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:39`).
-   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:40`).
-   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:41`).
-   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:42`).
-6. Mappage résultats → réponse HTTP (`server.js:52-53`) :
-   - `ok: false` (réservation inexistante/déjà annulée) → 404 `{ error: "Reservation not found" }`
+   - **Valide cohérence** [SHIA-396] : vérifie que `reservation.transferId === transferId` (`transfers.js:39`), rejette 404 si incohérent (protection contre les IDs mal appairés).
+   - Récupère le transfert associé via `reservation.transferId` (`transfers.js:40`).
+   - **Mutation en mémoire (inverse)** : `transfer.sold -= reservation.seats` (`transfers.js:41`).
+   - **Suppression du registre** : `reservations.delete(reservationId)` (`transfers.js:42`).
+   - Retour `{ ok: true, seatsLeft: seatsLeft(transfer) }` (`transfers.js:43`).
+6. Mappage résultats → réponse HTTP (`server.js:53-54`) :
+   - `ok: false` (réservation inexistante/déjà annulée OU transferId incohérent) → 404 `{ error: "Reservation not found" }`
    - `ok: true` → 200 `{ seatsLeft: X }` (places libres après annulation)
 
 **État observé par le client** : réponse 200 JSON contenant les places libres après libération :
@@ -227,7 +228,7 @@ Impossible. Le tableau `transfers` est une constante module (`src/transfers.js:5
 Pas de base de données. Un redémarrage du process ramène `sold` aux valeurs hardcodées. Le registre `reservations` Map (en mémoire) est perdu.
 
 ### Filtrage côté serveur
-Impossible de demander « uniquement les transferts avec places disponibles » — pas de query param `?available=true` ni de méthode équivalente. Le client doit filtrer lui-même.
+**Implémenté** ([SHIAAAAAAAAAAAAAAAAAAAAAAAA-408](SHIAAAAAAAAAAAAAAAAAAAAAAAA-408)). L'endpoint GET /transfers accepte un paramètre de requête `?available=true` (server.js:14-15). Quand ce paramètre est présent, seuls les transferts non-saturés (`isFull(t) === false`) sont retournés. Sans le paramètre, le catalogue complet est retourné, y compris les transferts complets (`seatsLeft: 0`).
 
 ### Modification d'une réservation
 Impossible. Une fois réservée, on ne peut que l'annuler complètement ou accepter sa perte au redémarrage. Pas de modification partielle (ex. augmenter/réduire le nombre de sièges d'une réservation existante).
@@ -275,12 +276,8 @@ Pas d'appel HTTP vers un système externe, pas de connexion à une base de donn�
 
 ## Hypothèses non confirmées
 
-### `isFull` exportée mais non câblée
-La fonction `isFull(transfer)` est définie et exportée (`src/transfers.js:21-23`) mais jamais importée par `src/server.js` ni exposée dans la réponse HTTP. Possible usages futurs :
-- Filtrer les transferts complets dans une future requête `GET /transfers?available=true`
-- Indicateur UI côté frontend (champ `isFull` dans la réponse)
-
-Aucune décision documentée.
+### `isFull` définie et utilisée
+La fonction `isFull(transfer)` est définie (`transfers.js:21-23`), exportée, et **utilisée dans le filtrage côté serveur** (`server.js:15`, branche `availableOnly`). Elle implémente le prédicat « transfert saturé » pour le paramètre `?available=true` introduit en [SHIAAAAAAAAAAAAAAAAAAAAAAAA-408](SHIAAAAAAAAAAAAAAAAAAAAAAAA-408).
 
 ### Fixture transfert plein
 Le transfert id 2 (`sold: 60, seats: 60`) apparaît complètement vendu dès l'initialisation. C'est probablement une fixture pour tester le cas de saturation (observable dans `test/transfers.test.js:11-13` où `isFull({ seats: 60, sold: 60 })` = `true` est testé), mais aucun commentaire ne le confirme.
